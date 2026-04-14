@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@theme {
+  /* ── Sovereign Intelligence — Dark Navy Theme ── */
+  --color-background:            #040d1a;
+  --color-foreground:            #dce8ff;
+
+  --color-card:                  #071428;
+  --color-card-foreground:       #dce8ff;
+
+  --color-primary:               #3b82f6;
+  --color-primary-foreground:    #ffffff;
+
+  --color-secondary:             #0c1b36;
+  --color-secondary-foreground:  #a0bde8;
+
+  --color-muted:                 #0c1b36;
+  --color-muted-foreground:      #5c7aa3;
+
+  --color-accent:                #132040;
+  --color-accent-foreground:     #dce8ff;
+
+  --color-border:                #1a3460;
+  --color-input:                 #0c1b36;
+  --color-ring:                  #3b82f6;
+
+  --color-destructive:           #ef4444;
+  --color-destructive-foreground:#ffffff;
+  --color-success:               #10b981;
+  --color-warning:               #f59e0b;
+
+  --radius-sm:  0.25rem;
+  --radius-md:  0.375rem;
+  --radius-lg:  0.625rem;
+}
+
+/* ── Base ── */
+body {
+  margin: 0;
+  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+  background-color: #040d1a;
+  color: #dce8ff;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Subtle horizontal scan-line texture */
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3px,
+    rgba(59, 130, 246, 0.018) 3px,
+    rgba(59, 130, 246, 0.018) 4px
+  );
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4, h5 {
+  font-family: 'Syne', system-ui, sans-serif;
+  letter-spacing: -0.015em;
+}
+
+.font-mono, code, [data-mono] {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+/* ── Custom scrollbar ── */
+::-webkit-scrollbar          { width: 5px; height: 5px; }
+::-webkit-scrollbar-track    { background: #040d1a; }
+::-webkit-scrollbar-thumb    { background: #1a3460; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3b82f6; }
+
+/* ── Auth page grid background ── */
+.bg-auth-grid {
+  background-image:
+    linear-gradient(rgba(59, 130, 246, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59, 130, 246, 0.055) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+/* ── Logo glow pulse ── */
+@keyframes glow-pulse {
+  0%, 100% { filter: drop-shadow(0 0 5px rgba(59, 130, 246, 0.55)); }
+  50%       { filter: drop-shadow(0 0 13px rgba(59, 130, 246, 0.9)); }
+}
+.logo-glow { animation: glow-pulse 3s ease-in-out infinite; }
+
+/* ── Card hover — subtle blue border glow ── */
+.card-hover {
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.card-hover:hover {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35), 0 8px 32px rgba(4, 13, 26, 0.8);
+  border-color: rgba(59, 130, 246, 0.35) !important;
+}
+
+/* ── Primary button glow ── */
+.btn-glow:not(:disabled):hover {
+  box-shadow: 0 0 22px rgba(59, 130, 246, 0.45);
+}
+
+/* ── Shimmer skeleton ── */
+@keyframes shimmer {
+  from { background-position: -200% center; }
+  to   { background-position:  200% center; }
+}
+.shimmer {
+  background: linear-gradient(90deg, #0c1b36 25%, #162d58 50%, #0c1b36 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.8s infinite;
+}
+
+/* ── Progress bar glow ── */
+.progress-bar-glow { box-shadow: 0 0 10px rgba(59, 130, 246, 0.5); }
+
+/* ── Step indicator pulse ring ── */
+@keyframes step-pulse {
+  0%, 100% { box-shadow: 0 0 0 0   rgba(59, 130, 246, 0.55); }
+  50%       { box-shadow: 0 0 0 7px rgba(59, 130, 246, 0); }
+}
+.step-active { animation: step-pulse 2s ease-in-out infinite; }
+
+/* ── OCR scan-line animation ── */
+@keyframes scan-sweep {
+  0%   { top: 0;    opacity: 0; }
+  5%   { opacity: 1; }
+  95%  { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+.scan-sweep {
+  position: absolute;
+  left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent 0%, rgba(59,130,246,0.8) 50%, transparent 100%);
+  animation: scan-sweep 2s ease-in-out infinite;
+  pointer-events: none;
+}
