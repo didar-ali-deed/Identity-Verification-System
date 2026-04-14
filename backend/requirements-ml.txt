@@ -1,0 +1,16 @@
+# Heavy ML packages — slow Docker layer, cached between rebuilds.
+
+# OCR — TrOCR (Microsoft) via HuggingFace.
+# Torch installed from PyTorch's CUDA 12.1 index — works with CUDA 13.0 driver.
+transformers>=4.40.0
+timm>=0.9.0
+sentencepiece>=0.1.99
+
+# Face Detection & Recognition
+mediapipe>=0.10.14
+deepface>=0.0.93
+opencv-python-headless>=4.10.0
+Pillow>=10.4.0
+
+# Task Queue
+celery>=5.4.0
