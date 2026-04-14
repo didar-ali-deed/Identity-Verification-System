@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+v_env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads
+uploads/
+*.jpg
+*.jpeg
+*.png
+!frontend/public/**
+
+# Docker
+docker-compose.override.yml
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Build
+frontend/dist/
+
+# ML Models (downloaded at runtime)
+backend/app/models_data/
+
+# Claude local settings
+.claude/settings.local.json
+
+# Logs
+*.log
+.claude/
