@@ -1,8 +1,7 @@
 # Identity Verification System (IDV)
 
-A production-grade **Identity Verification System** that performs forensic-level document verification through a 10-stage AI pipeline. Designed for visa processing, onboarding, and compliance workflows.
-
----
+A full-stack Identity Verification System that demonstrates a multi-stage AI pipeline for document verification, biometric matching, fraud screening and automated decision support.
+-
 
 ## What It Does
 
