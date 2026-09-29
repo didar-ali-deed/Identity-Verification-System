@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,6 +48,17 @@ class Settings(BaseSettings):
     # CORS
     allowed_origins: str = "http://localhost:5173,http://localhost:3000"
 
+    @model_validator(mode="after")
+    def validate_production_settings(self) -> "Settings":
+        if self.is_production:
+            if self.debug:
+                raise ValueError("DEBUG must be false in production")
+            if len(self.jwt_secret_key) < 32 or self.jwt_secret_key.casefold().startswith(
+                ("change-me", "replace-with")
+            ):
+                raise ValueError("Production requires a unique JWT_SECRET_KEY of at least 32 characters")
+        return self
+
     @property
     def allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.allowed_origins.split(",")]
@@ -57,7 +69,7 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        return self.environment == "production"
+        return self.environment.casefold() == "production"
 
 
 @lru_cache

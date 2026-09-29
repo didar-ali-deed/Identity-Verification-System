@@ -1,7 +1,9 @@
+import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError
 from passlib.context import CryptContext
 
 from app.config import get_settings
@@ -45,6 +47,11 @@ def create_refresh_token(user_id: uuid.UUID) -> str:
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
+def hash_refresh_token(token: str) -> str:
+    """Hash a refresh token before storing it in the database."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def decode_token(token: str) -> dict | None:
     """Decode and validate a JWT token. Returns None if invalid."""
     try:
@@ -54,5 +61,5 @@ def decode_token(token: str) -> dict | None:
             algorithms=[settings.jwt_algorithm],
         )
         return payload
-    except JWTError:
+    except PyJWTError:
         return None

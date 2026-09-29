@@ -98,6 +98,6 @@ async def logout(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    current_user.refresh_token = None
+    current_user.refresh_token_hash = None
     await db.flush()
     return {"detail": "Successfully logged out"}

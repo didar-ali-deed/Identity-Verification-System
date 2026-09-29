@@ -28,11 +28,15 @@ services:
       retries: 5
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     environment:
       DATABASE_URL: postgresql+asyncpg://idv_user:idv_password@postgres:5432/idv_db
       REDIS_URL: redis://redis:6379/0
-      JWT_SECRET_KEY: dev-secret-key-change-in-production-abc123
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       JWT_ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: "30"
       REFRESH_TOKEN_EXPIRE_DAYS: "7"
@@ -52,23 +56,20 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   celery-worker:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     environment:
       DATABASE_URL: postgresql+asyncpg://idv_user:idv_password@postgres:5432/idv_db
       REDIS_URL: redis://redis:6379/0
-      JWT_SECRET_KEY: dev-secret-key-change-in-production-abc123
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       JWT_ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: "30"
       REFRESH_TOKEN_EXPIRE_DAYS: "7"
@@ -86,13 +87,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     command: celery -A app.tasks worker --loglevel=info --concurrency=2
 
   frontend:

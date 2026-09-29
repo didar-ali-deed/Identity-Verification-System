@@ -27,7 +27,7 @@ class User(Base):
         nullable=False,
     )
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
-    refresh_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    refresh_token_hash: Mapped[str | None] = mapped_column("refresh_token", String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

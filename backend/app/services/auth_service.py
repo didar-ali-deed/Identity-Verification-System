@@ -1,3 +1,4 @@
+import hmac
 import uuid
 
 import structlog
@@ -11,6 +12,7 @@ from app.utils.security import (
     create_refresh_token,
     decode_token,
     hash_password,
+    hash_refresh_token,
     verify_password,
 )
 
@@ -67,7 +69,7 @@ async def authenticate_user(
     access_token = create_access_token(user.id, user.role.value)
     refresh_token = create_refresh_token(user.id)
 
-    user.refresh_token = refresh_token
+    user.refresh_token_hash = hash_refresh_token(refresh_token)
     await db.flush()
 
     await logger.ainfo("User logged in", user_id=str(user.id))
@@ -93,16 +95,20 @@ async def refresh_tokens(
     if not user or not user.is_active:
         raise AuthServiceError("User not found or deactivated", status_code=401)
 
-    if user.refresh_token != refresh_token:
-        user.refresh_token = None
+    token_hash = hash_refresh_token(refresh_token)
+    if not user.refresh_token_hash or not hmac.compare_digest(user.refresh_token_hash, token_hash):
+        user.refresh_token_hash = None
         await db.flush()
         await logger.awarn("Refresh token reuse detected", user_id=str(user.id))
+        # Persist revocation before the route converts this into an HTTP error;
+        # the request dependency rolls back transactions when exceptions escape.
+        await db.commit()
         raise AuthServiceError("Refresh token has been revoked", status_code=401)
 
     new_access_token = create_access_token(user.id, user.role.value)
     new_refresh_token = create_refresh_token(user.id)
 
-    user.refresh_token = new_refresh_token
+    user.refresh_token_hash = hash_refresh_token(new_refresh_token)
     await db.flush()
 
     return new_access_token, new_refresh_token

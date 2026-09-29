@@ -150,35 +150,49 @@ GET    /api/v1/health
 
 ### Prerequisites
 - Docker & Docker Compose
-- Node.js 18+ (for local frontend dev)
+- Node.js 20.19+ or 22.12+ (for local frontend dev)
 - Python 3.12+ (for local backend dev)
 
 ### Run with Docker
 
-```bash
-cp .env.example .env        # fill in your secrets
-docker-compose up --build
+```powershell
+Copy-Item .env.example .env
+# Replace JWT_SECRET_KEY with a unique random value before deployment.
+docker compose up --build
 ```
 
-App available at `http://localhost` (Nginx) or:
-- Frontend: `http://localhost:5173` (dev)
-- Backend API: `http://localhost:8000`
-- API Docs: `http://localhost:8000/docs`
+The app is available at `http://localhost` through Nginx. The Compose setup uses CPU PyTorch by default; it does not require an NVIDIA GPU.
+The OCR model downloads on first document processing and remains cached in the `hf_cache` volume.
+For production, set `ENVIRONMENT=production` and use a unique `JWT_SECRET_KEY` in `.env`.
+
+API docs: `http://localhost/api/docs`
 
 ### Local Development
 
-```bash
-# Backend
-cd backend
-pip install -r requirements.txt
-alembic upgrade head
-uvicorn app.main:app --reload --port 8000
+```powershell
+# From the repository root; Python 3.12 is required.
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+.venv\Scripts\python.exe -m pip install -r backend\requirements.txt -r backend\requirements-ml.txt
+docker compose up -d postgres redis
+Copy-Item .env.example backend\.env
 
-# Frontend
+# Terminal 1: from the repository root
+cd backend
+..\.venv\Scripts\python.exe -m alembic upgrade head
+..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+
+# Terminal 2: open a new terminal at the repository root
+cd backend
+..\.venv\Scripts\python.exe -m celery -A app.tasks worker --loglevel=info --pool=solo
+
+# Terminal 3: open another new terminal at the repository root
 cd frontend
-npm install
-npm run dev
+npm ci
+npm run dev -- --host 0.0.0.0
 ```
+
+Open `http://localhost:5173`. API docs are at `http://localhost:8000/api/docs`.
 
 ### Environment Variables
 

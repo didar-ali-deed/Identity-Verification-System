@@ -19,9 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Layer 1a: PyTorch CUDA 12.1 wheel (works with CUDA 13.0 driver) ─────────
+# ── Layer 1a: CPU PyTorch by default; set TORCH_INDEX_URL for a GPU build ────
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir \
-    --index-url https://download.pytorch.org/whl/cu121 \
+    --index-url ${TORCH_INDEX_URL} \
     torch torchvision
 
 # ── Layer 1b: heavy ML packages (slow, cached) ──────────────────────────────
@@ -32,8 +33,7 @@ RUN pip install --no-cache-dir -r requirements-ml.txt
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# NOTE: PaddleOCR models download automatically on first OCR call.
-# They are NOT baked into the image — bcebos.com CDN is unreliable at build time.
+# TrOCR downloads its model on first OCR use into the mounted Hugging Face cache.
 
 COPY . .
 
