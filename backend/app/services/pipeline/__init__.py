@@ -1,6 +1,6 @@
-"""God-Level Identity Verification Pipeline.
+"""Identity Verification Pipeline.
 
-10-stage forensic-grade verification pipeline:
+10-stage evidence-based verification pipeline:
   Stage 0: Document Acceptance & National Validity Gate
   Stage 1: Document Liveness & Anti-Spoofing
   Stage 2: Field Extraction (Dual-Zone, Dual-Document)

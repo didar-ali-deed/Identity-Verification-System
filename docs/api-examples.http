@@ -1,0 +1,37 @@
+@base = http://localhost:18000/api/v1
+@accessToken = REPLACE_WITH_LOGIN_ACCESS_TOKEN
+
+### Register a synthetic user
+POST {{base}}/auth/register
+Content-Type: application/json
+
+{"email":"alex.sample@example.com","password":"SyntheticPass123","full_name":"Alex Sample"}
+
+### Log in
+POST {{base}}/auth/login
+Content-Type: application/json
+
+{"email":"alex.sample@example.com","password":"SyntheticPass123"}
+
+### Create an application
+POST {{base}}/idv/submit
+Authorization: Bearer {{accessToken}}
+
+### Get the current application
+GET {{base}}/idv/status
+Authorization: Bearer {{accessToken}}
+
+### Get saved pipeline evidence
+GET {{base}}/idv/pipeline-result
+Authorization: Bearer {{accessToken}}
+
+### Create a phone capture link
+GET {{base}}/idv/mobile-selfie-token
+Authorization: Bearer {{accessToken}}
+
+### Admin list (requires an admin token)
+GET {{base}}/admin/applications?status=ready_for_review
+Authorization: Bearer {{accessToken}}
+
+### Dependency readiness (503 when degraded)
+GET {{base}}/health

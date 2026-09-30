@@ -21,6 +21,33 @@ export default function DocumentUpload({
   const [preview, setPreview] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rotating, setRotating] = useState(false);
+
+  const rotate = async (direction: number) => {
+    if (!selectedFile) return;
+    setRotating(true);
+    try {
+      const image = await createImageBitmap(selectedFile);
+      const canvas = document.createElement("canvas");
+      canvas.width = image.height;
+      canvas.height = image.width;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Image rotation unavailable");
+      context.translate(canvas.width / 2, canvas.height / 2);
+      context.rotate(direction * Math.PI / 2);
+      context.drawImage(image, -image.width / 2, -image.height / 2);
+      image.close();
+      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, selectedFile.type, 0.95));
+      if (!blob) throw new Error("Image rotation failed");
+      if (blob.size > maxSize) throw new Error("Rotated image exceeds the upload limit");
+      setSelectedFile(new File([blob], selectedFile.name, { type: selectedFile.type }));
+      setPreview(canvas.toDataURL(selectedFile.type, 0.95));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not rotate image");
+    } finally {
+      setRotating(false);
+    }
+  };
 
   const onDrop = useCallback(
     (acceptedFiles: File[], rejectedFiles: FileRejection[]) => {
@@ -103,7 +130,7 @@ export default function DocumentUpload({
             />
             <button
               onClick={handleClear}
-              disabled={isUploading}
+              disabled={isUploading || rotating}
               className="absolute top-2 right-2 p-1.5 bg-[#071428]/90 border border-border rounded-lg hover:bg-muted cursor-pointer border-solid disabled:opacity-50 transition-colors"
             >
               <X className="h-4 w-4 text-foreground" />
@@ -128,6 +155,12 @@ export default function DocumentUpload({
           </div>
         </div>
       )}
+
+      {preview && <div className="flex gap-3 text-sm">
+        <button onClick={() => rotate(-1)} disabled={isUploading || rotating} className="text-primary cursor-pointer disabled:opacity-50">Rotate left</button>
+        <button onClick={() => rotate(1)} disabled={isUploading || rotating} className="text-primary cursor-pointer disabled:opacity-50">Rotate right</button>
+        <span className="text-xs text-muted-foreground">Make the text upright before uploading.</span>
+      </div>}
 
       {error && (
         <p className="text-xs text-red-400">{error}</p>

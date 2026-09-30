@@ -58,10 +58,30 @@ def detect_faces(image_path: str) -> list[dict]:
 
     Returns list of dicts with: bbox (x, y, w, h in pixels), confidence.
     """
-    import mediapipe as mp
-
     img = _read_image(image_path)
     h, w = img.shape[:2]
+    if settings.face_backend == "insightface":
+        from app.services.biometric_engine import detect
+
+        faces = []
+        for face in detect(img):
+            x1, y1, x2, y2 = map(int, face.bbox)
+            faces.append(
+                {
+                    "x": x1,
+                    "y": y1,
+                    "width": x2 - x1,
+                    "height": y2 - y1,
+                    "x_norm": x1 / w,
+                    "y_norm": y1 / h,
+                    "width_norm": (x2 - x1) / w,
+                    "height_norm": (y2 - y1) / h,
+                    "confidence": float(face.det_score),
+                }
+            )
+        return faces
+    import mediapipe as mp
+
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
@@ -136,7 +156,7 @@ def save_extracted_face(image_path: str, output_path: str) -> bool:
 def compare_faces(
     image1_path: str,
     image2_path: str,
-    model_name: str = "Facenet",
+    model_name: str | None = None,
 ) -> dict:
     """Compare two face images and return similarity result.
 
@@ -149,13 +169,19 @@ def compare_faces(
         raise FaceServiceError("Second image not found")
 
     try:
+        if settings.face_backend == "insightface":
+            from app.services.biometric_engine import compare
+
+            return compare(image1_path, image2_path)
         from deepface import DeepFace
+
+        model_name = model_name or settings.face_model
 
         result = DeepFace.verify(
             img1_path=image1_path,
             img2_path=image2_path,
             model_name=model_name,
-            enforce_detection=False,
+            enforce_detection=True,
             detector_backend="opencv",
         )
 

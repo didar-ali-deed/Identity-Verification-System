@@ -120,7 +120,7 @@ async def validate_issuing_country(country_code: str, db: AsyncSession) -> dict:
         }
 
     return {
-        "valid": True,
+        "valid": country.status == "active",
         "status": country.status,
         "requires_edd": country.requires_edd,
         "detail": f"Country {country_code} ({country.country_name}) is {country.status}",
@@ -256,6 +256,7 @@ async def run_stage_0(ctx: PipelineContext, db: AsyncSession) -> StageResult:
                 if validation["status"] == "sanctioned":
                     hard_fail = True
                     passed = False
+                    flags.append({"flag_type": "sanctioned_country", "detail": validation["detail"]})
                     reason_codes.append(
                         {
                             "code": "SANCTIONED_COUNTRY",
@@ -281,6 +282,8 @@ async def run_stage_0(ctx: PipelineContext, db: AsyncSession) -> StageResult:
 
             if not eligibility.get("eligible"):
                 passed = False
+                hard_fail = True
+                flags.append({"flag_type": "class_not_eligible", "detail": eligibility["detail"]})
                 reason_codes.append(
                     {
                         "code": "DOC_CLASS_NOT_ELIGIBLE",
@@ -325,16 +328,12 @@ async def run_stage_0(ctx: PipelineContext, db: AsyncSession) -> StageResult:
 
 def _extract_country_from_mrz(raw_text: str) -> str | None:
     """Extract 3-letter country code from MRZ text."""
-    clean = raw_text.replace(" ", "").upper()
-
-    # TD3 line 1: P<XXX... (positions 2:5)
-    td3_match = re.search(r"P[<A-Z]([A-Z]{3})", clean)
-    if td3_match:
-        return td3_match.group(1)
-
-    # TD1 line 1: I<XXX... or ID<XXX...
-    td1_match = re.search(r"I[DA<]([A-Z]{3})", clean)
-    if td1_match:
-        return td1_match.group(1)
+    for line in raw_text.upper().splitlines():
+        clean = re.sub(r"\s", "", line)
+        # Only a complete MRZ header can identify the issuer. Never search
+        # inside names, nationality labels or flattened page text.
+        match = re.fullmatch(r"(?:P<|I<|ID|IA)([A-Z]{3})[A-Z0-9<]{25,39}", clean)
+        if match and "<<" in clean:
+            return match.group(1)
 
     return None

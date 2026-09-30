@@ -1,5 +1,7 @@
 import { useIDVStatus, usePipelineResult } from "@/api/idv";
+import PipelineBreakdown from "@/components/PipelineBreakdown";
 import VerificationStatus from "@/components/VerificationStatus";
+import ResetVerificationButton from "@/components/ResetVerificationButton";
 import { Link } from "react-router-dom";
 import {
   FileCheck,
@@ -8,15 +10,6 @@ import {
   Brain,
   Loader2,
   AlertTriangle,
-  Shield,
-  Activity,
-  Fingerprint,
-  Scale,
-  Gavel,
-  Eye,
-  Scan,
-  Database,
-  FileSearch,
 } from "lucide-react";
 
 // Fix: add polling so status auto-updates while pipeline is running
@@ -99,9 +92,7 @@ export default function IDVStatus() {
     );
   }
 
-  const hasFaceMatch = application.face_match_score !== null;
-  const hasPipeline  =
-    pipelineData?.pipeline_version !== null && pipelineData?.pipeline_version !== undefined;
+  const hasFaceMatch = application.selfie_uploaded;
 
   return (
     <div className="max-w-2xl mx-auto space-y-5">
@@ -117,6 +108,7 @@ export default function IDVStatus() {
       </div>
 
       {/* Application Info */}
+      <ResetVerificationButton applicationId={application.id} processing={application.status === "processing"} />
       <div className="bg-card border border-border rounded-xl p-5">
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
@@ -165,7 +157,7 @@ export default function IDVStatus() {
             icon={FileImage} title="Document Upload"
             done={application.documents.length > 0}
             detail={application.documents.length > 0
-              ? `${application.documents[0].doc_type.replace("_", " ")} uploaded`
+              ? `${application.documents.map(doc => doc.doc_type.replace("_", " ")).join(" and ")} uploaded`
               : "Awaiting document"}
           />
           <ProgressItem
@@ -197,101 +189,7 @@ export default function IDVStatus() {
         </div>
       </div>
 
-      {/* Pipeline stage progress */}
-      {hasPipeline && pipelineData && (
-        <div className="bg-card border border-border rounded-xl p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-foreground">Pipeline Verification</h2>
-            {pipelineData.pipeline_decision && (
-              <span
-                className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                  pipelineData.pipeline_decision === "APPROVED"
-                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/25"
-                    : pipelineData.pipeline_decision === "MANUAL_REVIEW"
-                      ? "bg-amber-500/10 text-amber-400 border border-amber-500/25"
-                      : "bg-red-500/10 text-red-400 border border-red-500/25"
-                }`}
-              >
-                {pipelineData.pipeline_decision.replace("_", " ")}
-              </span>
-            )}
-          </div>
-
-          {pipelineData.weighted_total !== null && (
-            <div className="mb-5">
-              <div className="flex items-center justify-between text-sm mb-2">
-                <span className="text-xs text-muted-foreground uppercase tracking-wider">
-                  Verification Score
-                </span>
-                <span
-                  className={`font-bold text-base ${
-                    pipelineData.weighted_total >= 0.87 ? "text-emerald-400" :
-                    pipelineData.weighted_total >= 0.70 ? "text-amber-400" :
-                    "text-red-400"
-                  }`}
-                  style={{ fontFamily: "JetBrains Mono, monospace" }}
-                >
-                  {(pipelineData.weighted_total * 100).toFixed(1)}%
-                </span>
-              </div>
-              <div className="w-full bg-muted rounded-full h-2">
-                <div
-                  className={`h-2 rounded-full transition-all progress-bar-glow ${
-                    pipelineData.weighted_total >= 0.87 ? "bg-emerald-500" :
-                    pipelineData.weighted_total >= 0.70 ? "bg-amber-500" :
-                    "bg-red-500"
-                  }`}
-                  style={{ width: `${Math.min(pipelineData.weighted_total * 100, 100)}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-5 gap-1.5">
-            {[
-              { label: "Accept",    icon: FileCheck  },
-              { label: "Liveness",  icon: Eye        },
-              { label: "Extract",   icon: Scan       },
-              { label: "Normalize", icon: Database   },
-              { label: "Watchlist", icon: Shield     },
-              { label: "Similarity",icon: Fingerprint},
-              { label: "Scoring",   icon: Activity   },
-              { label: "Rules",     icon: Gavel      },
-              { label: "Decision",  icon: Scale      },
-              { label: "Result",    icon: FileSearch },
-            ].map((stage, i) => {
-              const StageIcon = stage.icon;
-              // Fix: each stage is "done" based on pipeline having a decision (all passed)
-              // vs "active" when no decision yet. Not all green on failure.
-              const isDone = pipelineData.pipeline_decision !== null;
-              const isApproved = pipelineData.pipeline_decision === "APPROVED";
-              return (
-                <div
-                  key={i}
-                  className={`flex flex-col items-center gap-1 p-2 rounded-lg text-center transition-all ${
-                    isDone && isApproved
-                      ? "bg-emerald-500/8 border border-emerald-500/15"
-                      : isDone
-                        ? "bg-amber-500/8 border border-amber-500/15"
-                        : "bg-muted border border-border"
-                  }`}
-                >
-                  <StageIcon
-                    className={`h-3.5 w-3.5 ${
-                      isDone && isApproved ? "text-emerald-400" :
-                      isDone ? "text-amber-400" :
-                      "text-muted-foreground"
-                    }`}
-                  />
-                  <span className="text-[9px] leading-tight text-muted-foreground">
-                    {stage.label}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {pipelineData?.pipeline_result && <PipelineBreakdown result={pipelineData.pipeline_result} />}
 
       {/* Documents */}
       {application.documents.length > 0 && (
@@ -313,7 +211,7 @@ export default function IDVStatus() {
                   </div>
                 </div>
                 <div className="text-right text-xs space-y-0.5">
-                  {doc.fraud_score !== null && (
+                  {pipelineData?.pipeline_result && doc.fraud_score !== null && (
                     <p className={doc.fraud_score > 0.7 ? "text-red-400 font-medium" : "text-emerald-400 font-medium"}>
                       Fraud: {(doc.fraud_score * 100).toFixed(0)}%
                     </p>

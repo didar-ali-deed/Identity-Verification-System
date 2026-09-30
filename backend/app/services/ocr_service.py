@@ -7,156 +7,130 @@ import cv2
 import numpy as np
 import structlog
 
+from app.config import get_settings
+
 logger = structlog.get_logger()
 
-# ── TrOCR singleton ───────────────────────────────────────────────────────────
-# microsoft/trocr-base-printed: fast, accurate for printed document text.
-# Downloaded from HuggingFace on first use (~400 MB), cached in container volume.
-_ocr_lock = threading.Lock()
-_ocr_processor = None
-_ocr_model = None
-_ocr_device = None
+_easy_reader = None
+_easy_lock = threading.Lock()
 
 
-def _get_ocr():
-    """Thread-safe lazy initialiser — loads TrOCR exactly once per process."""
-    global _ocr_processor, _ocr_model, _ocr_device
-    if _ocr_model is None:
-        with _ocr_lock:
-            if _ocr_model is None:
-                import logging  # noqa: PLC0415
-                import torch  # noqa: PLC0415
-                from transformers import TrOCRProcessor, VisionEncoderDecoderModel  # noqa: PLC0415
+def _load_ocr_image(image_path: str) -> np.ndarray:
+    from PIL import Image, ImageOps
 
-                logging.getLogger("transformers").setLevel(logging.ERROR)
-                _ocr_device = "cuda" if torch.cuda.is_available() else "cpu"
-                _ocr_processor = TrOCRProcessor.from_pretrained(
-                    "microsoft/trocr-base-printed"
-                )
-                _ocr_model = VisionEncoderDecoderModel.from_pretrained(
-                    "microsoft/trocr-base-printed"
-                ).to(_ocr_device)
-                _ocr_model.eval()
-    return _ocr_processor, _ocr_model, _ocr_device
+    with Image.open(image_path) as source:
+        image = np.asarray(ImageOps.exif_transpose(source).convert("RGB"))
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    # ID cards and passport data pages are landscape; retain originals on disk.
+    if image.shape[0] > image.shape[1] * 1.2:
+        image = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    scale = min(1.0, 1800 / max(image.shape[:2]))
+    if scale < 1:
+        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    return image
 
 
-def _recognize_pil(pil_image):
-    """Run TrOCR on a single PIL image crop. Returns (text, confidence)."""
-    import torch  # noqa: PLC0415
-    from PIL import Image as PILImage  # noqa: PLC0415
+def _extract_easyocr(image_path: str) -> list[dict]:
+    global _easy_reader
+    with _easy_lock:
+        if _easy_reader is None:
+            import easyocr
 
-    processor, model, device = _get_ocr()
-    if pil_image.mode != "RGB":
-        pil_image = pil_image.convert("RGB")
-    pixel_values = processor(images=pil_image, return_tensors="pt").pixel_values.to(device)
-    with torch.no_grad():
-        generated_ids = model.generate(pixel_values)
-    text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
-    return text, 0.95  # TrOCR doesn't expose per-token confidence; use fixed high value
-
-
-def _detect_text_regions(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
-    """Detect candidate text-line bounding boxes using morphological operations."""
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 4))
-    dilated = cv2.dilate(binary, kernel, iterations=1)
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    regions = []
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        if w >= 30 and h >= 8:
-            regions.append((x, y, w, h))
-    # Sort top-to-bottom, then left-to-right
-    regions.sort(key=lambda r: (r[1], r[0]))
-    return regions
+            _easy_reader = easyocr.Reader(
+                ["en"],
+                gpu=get_settings().inference_use_gpu,
+                model_storage_directory=str(Path.home() / ".cache" / "easyocr"),
+                verbose=False,
+            )
+        return [
+            {
+                "text": str(text),
+                "confidence": float(conf),
+                "bbox": [[float(value) for value in point] for point in box],
+                "provider": "easyocr",
+            }
+            for box, text, conf in _easy_reader.readtext(_load_ocr_image(image_path))
+        ]
 
 
 class OCRServiceError(Exception):
-    def __init__(self, detail: str):
-        self.detail = detail
-
-
-def preprocess_image(image_path: str) -> np.ndarray:
-    """Load and enhance image for downstream use (kept for backward-compat)."""
-    img = cv2.imread(image_path)
-    if img is None:
-        raise OCRServiceError("Failed to read image file")
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    return clahe.apply(gray)
+    pass
 
 
 def extract_text(image_path: str) -> list[dict]:
-    """Extract text from a document image using TrOCR.
-
-    Detects text-line regions with OpenCV morphology, then recognises each
-    line with microsoft/trocr-base-printed.
-    Returns list of {text, confidence, bbox} dicts — same shape as before.
-    """
-    if not Path(image_path).exists():
-        raise OCRServiceError("Image file not found")
-
-    from PIL import Image as PILImage  # noqa: PLC0415
-
-    img = cv2.imread(image_path)
-    if img is None:
-        raise OCRServiceError("Failed to read image file")
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    regions = _detect_text_regions(gray)
-
-    output: list[dict] = []
-    for x, y, w, h in regions:
-        crop_bgr = img[y : y + h, x : x + w]
-        crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-        pil_crop = PILImage.fromarray(crop_rgb)
-        text, conf = _recognize_pil(pil_crop)
-        if text:
-            box = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
-            output.append({"text": text, "confidence": conf, "bbox": box})
-
-    return output
-
-
-def extract_mrz_zone(image_path: str) -> str:
-    """Crop the bottom 22% of the document (MRZ zone) and run TrOCR.
-
-    Returns raw MRZ text — typically two or three lines of A-Z 0-9 < characters.
-    """
-    from PIL import Image as PILImage  # noqa: PLC0415
-
-    img = cv2.imread(image_path)
-    if img is None:
-        return ""
-    h, w = img.shape[:2]
-    mrz_strip = img[int(h * 0.78) :, :]
-
-    if w < 1400:
-        scale = 1400 / w
-        mrz_strip = cv2.resize(mrz_strip, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-
-    gray = cv2.cvtColor(mrz_strip, cv2.COLOR_BGR2GRAY)
-    regions = _detect_text_regions(gray)
-
-    lines: list[str] = []
-    for x, y, rw, rh in regions:
-        crop = mrz_strip[y : y + rh, x : x + rw]
-        pil_crop = PILImage.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-        text, _ = _recognize_pil(pil_crop)
-        cleaned = re.sub(r"[^A-Z0-9<]", "", text.upper().replace(" ", ""))
-        if len(cleaned) >= 30 and "<<" in cleaned:
-            lines.append(cleaned)
-
-    return "\n".join(lines)
+    """Recognize document text with the single EasyOCR provider."""
+    try:
+        return _extract_easyocr(image_path)
+    except Exception as exc:
+        raise OCRServiceError("EasyOCR provider unavailable") from exc
 
 
 def get_raw_text(ocr_results: list[dict]) -> str:
     """Combine all OCR text results into a single string."""
-    return " ".join(r["text"] for r in ocr_results if r["text"])
+    return "\n".join(r["text"] for r in ocr_results if r["text"])
 
 
-def parse_passport(raw_text: str, ocr_results: list[dict], image_path: str = "") -> dict:
-    """Parse passport data. Tries MRZ zone first (most reliable), then VIZ fallback."""
+def _canonical_label(text: str) -> str:
+    # Normalize common label glyph errors without changing any identity value.
+    text = re.sub(r"\bdate\s+o[flt1]\s+", "Date of ", text, flags=re.IGNORECASE)
+    return re.sub(r"\bexpury\b", "Expiry", text, flags=re.IGNORECASE)
+
+
+def _label_value(rows: list[dict], label_re: str) -> str | None:
+    """Pair a label with a nearby value in its column, rather than reading order."""
+    for row in rows:
+        parts = re.split(r"[:|]", row["text"].strip(), maxsplit=1)
+        if not re.search(label_re, _canonical_label(parts[0].strip()), re.IGNORECASE):
+            continue
+        if len(parts) > 1 and parts[1].strip():
+            return parts[1].strip()
+        box = row.get("bbox")
+        if not box:
+            continue
+        x, y = box[0]
+        right, bottom = box[2]
+        height = max(bottom - y, 1)
+        values = []
+        for candidate in rows:
+            text = candidate["text"].strip()
+            candidate_box = candidate.get("bbox")
+            is_label = re.fullmatch(
+                r"(?:name|father\s*name|given\s*names?|surname|gender|sex|nationality|country\s*of\s*stay|date\s*of\s*(?:birth|issue|expiry)|(?:passport|identity|tracking|citizenship)\s*number|place\s*of\s*birth)",
+                _canonical_label(text),
+                re.IGNORECASE,
+            )
+            if candidate is row or not candidate_box or text.endswith(":") or is_label:
+                continue
+            cx, cy = candidate_box[0]
+            cbottom = candidate_box[2][1]
+            same_row = abs((cy + cbottom) / 2 - (y + bottom) / 2) <= height * 0.6
+            if same_row and cx >= right and cx - right <= height * 12:
+                values.append((cx - right, text))
+            elif (
+                -height * 0.35 <= cy - bottom <= height * 2.5
+                and (cy + cbottom) / 2 > (y + bottom) / 2 + height * 0.6
+                and abs(cx - x) <= max(32, height * 1.5)
+            ):
+                values.append((cy - bottom, text))
+        if values:
+            return min(values, key=lambda item: item[0])[1]
+    return None
+
+
+def _clean_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = " ".join(value.split())
+    labels = {"surname", "given names", "given name", "nationality", "date of birth", "date of expiry", "sex"}
+    if value.casefold() in labels or sum(char.isalpha() for char in value) < 2:
+        return None
+    if any(not (char.isalpha() or char in " '-’.") for char in value):
+        return None
+    return value
+
+
+def parse_passport(raw_text: str, ocr_results: list[dict], image_path: str = "", *, use_mrz: bool = True) -> dict:
+    """Parse document text; VIZ-only mode keeps cross-zone evidence independent."""
     data: dict = {
         "document_type": "passport",
         "full_name": None,
@@ -172,9 +146,7 @@ def parse_passport(raw_text: str, ocr_results: list[dict], image_path: str = "")
         "confidences": {},
     }
 
-    # ── MRZ — dedicated zone crop with Tesseract MRZ whitelist ───────────
-    mrz_raw = extract_mrz_zone(image_path) if image_path else ""
-    mrz_lines = _extract_mrz_lines(mrz_raw) or _extract_mrz_lines(raw_text)
+    mrz_lines = _extract_mrz_lines(raw_text) if use_mrz else None
     if mrz_lines:
         data["mrz_detected"] = True
         mrz = _parse_mrz(mrz_lines)
@@ -192,8 +164,12 @@ def parse_passport(raw_text: str, ocr_results: list[dict], image_path: str = "")
 
     def _next_val(label_re: str) -> str | None:
         """Return the value token immediately after a label in the OCR line list."""
+        spatial = _label_value(ocr_results, label_re)
+        if spatial is not None or any(row.get("bbox") for row in ocr_results):
+            return spatial
         for i, line in enumerate(lines):
-            if re.search(label_re, line, re.IGNORECASE):
+            parts = re.split(r"[:\|]", line, maxsplit=1)
+            if re.search(label_re, parts[0].strip(), re.IGNORECASE):
                 # Check same line after colon, or next non-empty line
                 after_colon = re.split(r"[:\|]", line, maxsplit=1)
                 if len(after_colon) > 1 and after_colon[1].strip():
@@ -203,8 +179,10 @@ def parse_passport(raw_text: str, ocr_results: list[dict], image_path: str = "")
         return None
 
     if not data["full_name"]:
-        surname = _next_val(r"^surname$")
-        given = _next_val(r"^given\s*names?$")
+        data["full_name"] = _clean_name(_next_val(r"^(?:full\s*name|name)$"))
+    if not data["full_name"]:
+        surname = _clean_name(_next_val(r"^surname$"))
+        given = _clean_name(_next_val(r"^given\s*names?$"))
         if surname and given:
             data["full_name"] = f"{given} {surname}".strip()
         elif surname:
@@ -215,7 +193,7 @@ def parse_passport(raw_text: str, ocr_results: list[dict], image_path: str = "")
     if not data["nationality"]:
         data["nationality"] = _next_val(r"^nationality$")
 
-    _date_re = r"\d{2}[.\-/]\d{2}[.\-/]\d{4}|\d{4}-\d{2}-\d{2}"
+    _date_re = r"\d{2}[.\-/]\d{2}[.\-/]\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"
 
     if not data["dob"]:
         dob_val = _next_val(r"^date\s+of\s+birth$")
@@ -259,6 +237,9 @@ def parse_passport(raw_text: str, ocr_results: list[dict], image_path: str = "")
 
     # Gender fallback from joined text
     if not data["gender"]:
+        sex = _next_val(r"^sex$|^gender$")
+        if sex and sex.upper() in ("M", "F", "MALE", "FEMALE"):
+            data["gender"] = {"M": "Male", "F": "Female", "MALE": "Male", "FEMALE": "Female"}[sex.upper()]
         gm = re.search(r"\b(male|female)\b", joined, re.IGNORECASE)
         if gm:
             data["gender"] = gm.group(1).capitalize()
@@ -267,6 +248,9 @@ def parse_passport(raw_text: str, ocr_results: list[dict], image_path: str = "")
             if gm2:
                 data["gender"] = {"M": "Male", "F": "Female"}.get(gm2.group(1).upper())
 
+    data["full_name"] = _clean_name(data["full_name"])
+    data["father_name"] = _clean_name(data["father_name"])
+    data["nationality"] = _clean_name(data["nationality"])
     return data
 
 
@@ -340,7 +324,7 @@ def parse_national_id(raw_text: str, ocr_results: list[dict]) -> dict:
             data["gender"] = gm2.group(1).capitalize()
 
     # ── Nationality ───────────────────────────────────────────────────────
-    nat_m = re.search(r"(?:nationality|country\s+of\s+stay)[:\s]+([A-Za-z]+)", joined, re.IGNORECASE)
+    nat_m = re.search(r"nationality[:\s]+([A-Za-z]+)", joined, re.IGNORECASE)
     if nat_m:
         data["nationality"] = nat_m.group(1).strip()
 
@@ -354,7 +338,7 @@ def parse_national_id(raw_text: str, ocr_results: list[dict]) -> dict:
             data["national_id_number"] = re.sub(r"\s", "", id_val)
 
     # ── Dates ─────────────────────────────────────────────────────────────
-    _date_re = r"\d{2}[./\-]\d{2}[./\-]\d{4}"
+    _date_re = r"\d{2}[./\-]\d{2}[./\-]\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"
 
     # CNIC two-column layout: "Date of Issue  Date of Expiry\n VALUE1  VALUE2"
     # The labels appear on the same line; their values appear on the next line
@@ -387,6 +371,27 @@ def parse_national_id(raw_text: str, ocr_results: list[dict]) -> dict:
             data["dob"] = all_dates[0]
         if not data["expiry_date"]:
             data["expiry_date"] = all_dates[-1]
+
+    # Column-aware values take precedence over ambiguous flattened reading order.
+    for label, field in [
+        (r"^name$", "full_name"),
+        (r"^father\s*name$", "father_name"),
+        (r"^nationality$", "nationality"),
+        (r"^country\s*of\s*stay$", "country_of_stay"),
+    ]:
+        candidate = _clean_name(_label_value(ocr_results, label))
+        if candidate:
+            data[field] = candidate
+    gender = _label_value(ocr_results, r"^gender$")
+    if gender and gender.upper() in ("M", "F", "MALE", "FEMALE"):
+        data["gender"] = {"M": "Male", "F": "Female", "MALE": "Male", "FEMALE": "Female"}[gender.upper()]
+    for label, field in [(r"^date\s*of\s*birth$", "dob"), (r"^date\s*of\s*expiry$", "expiry_date")]:
+        candidate = _label_value(ocr_results, label)
+        match = re.search(_date_re, candidate or "")
+        if match:
+            data[field] = match.group()
+    data["full_name"] = _clean_name(data["full_name"])
+    data["father_name"] = _clean_name(data["father_name"])
 
     return data
 
@@ -467,20 +472,17 @@ def validate_expiry(parsed_data: dict) -> dict:
 def _is_valid_mrz_line(line: str) -> bool:
     """Return True only if a cleaned string plausibly is a real MRZ line.
 
-    Real TD3 passport MRZ lines have:
-    - Exactly 44 chars (we're lenient: 42-44)
-    - At least 8 fill '<' characters (real lines have many)
-    - Line 1 always starts with a document-type letter + '<' (e.g. 'P<')
-    - Line 2 starts with a digit (doc number) or letter but NOT a long word
+    TD3 line 2 can contain no fillers when its optional data is populated.
+    The name line must start with P< and contain the surname separator.
     """
-    if len(line) < 40 or line.count("<") < 5:
+    if len(line) == 44 and re.fullmatch(r"[A-Z0-9<]{9}\d[A-Z<]{3}\d{6}\d[MF<]\d{6}\d[A-Z0-9<]{14}\d\d", line):
+        return True
+    if len(line) < 40 or line.count("<") < 5 or not line.startswith("P<"):
         return False
     # Reject lines that look like label/word concatenations (no consecutive '<')
     # Real MRZ line 1 has '<<' between surname and given names
     # Real MRZ line 2 has runs of '<<' at the end
-    if "<<" not in line:
-        return False
-    return True
+    return "<<" in line
 
 
 def _extract_mrz_lines(text: str) -> list[str] | None:
@@ -562,6 +564,7 @@ def _mrz_date_to_string(mrz_date: str) -> str | None:
     if len(mrz_date) != 6 or not mrz_date.isdigit():
         return None
     import datetime as _dt
+
     yy = int(mrz_date[:2])
     mm = mrz_date[2:4]
     dd = mrz_date[4:6]
@@ -821,7 +824,9 @@ def compute_field_confidence(
         if not result_text:
             continue
         # Exact or substring match
-        if normalized_value in result_text or result_text in normalized_value:
-            best_confidence = max(best_confidence, result["confidence"])
+        if normalized_value in result_text:
+            confidence = float(result["confidence"])
+            if np.isfinite(confidence) and 0 <= confidence <= 1:
+                best_confidence = max(best_confidence, confidence)
 
     return round(best_confidence, 4)

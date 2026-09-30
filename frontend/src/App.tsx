@@ -1,16 +1,17 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { useAuthStore } from "@/stores/authStore";
 import Layout from "@/components/Layout";
 import ProtectedRoute from "@/components/ProtectedRoute";
-import Login from "@/pages/Login";
-import Register from "@/pages/Register";
-import Home from "@/pages/Home";
-import IDVSubmission from "@/pages/IDVSubmission";
-import IDVStatus from "@/pages/IDVStatus";
-import AdminDashboard from "@/pages/AdminDashboard";
-import MobileSelfiePage from "@/pages/MobileSelfiePage";
+const Login = lazy(() => import("@/pages/Login"));
+const Register = lazy(() => import("@/pages/Register"));
+const Home = lazy(() => import("@/pages/Home"));
+const IDVSubmission = lazy(() => import("@/pages/IDVSubmission"));
+const IDVStatus = lazy(() => import("@/pages/IDVStatus"));
+const AdminDashboard = lazy(() => import("@/pages/AdminDashboard"));
+const MobileSelfiePage = lazy(() => import("@/pages/MobileSelfiePage"));
+const Demo = lazy(() => import("@/pages/Demo"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,15 +25,17 @@ const queryClient = new QueryClient({
 
 function AppRoutes() {
   const { isAuthenticated, fetchUser } = useAuthStore();
+  const { pathname } = useLocation();
 
   useEffect(() => {
-    fetchUser();
-  }, [fetchUser]);
+    if (pathname !== "/demo" && !pathname.startsWith("/m/")) fetchUser();
+  }, [fetchUser, pathname]);
 
   return (
     <Routes>
       {/* Fully public routes (no auth required) */}
       <Route path="/m/:token" element={<MobileSelfiePage />} />
+      <Route path="/demo" element={<Demo />} />
 
       {/* Public routes */}
       <Route
@@ -70,7 +73,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <AppRoutes />
+        <Suspense fallback={<div role="status" className="p-8 text-center text-muted-foreground">Loading application…</div>}><AppRoutes /></Suspense>
       </BrowserRouter>
     </QueryClientProvider>
   );

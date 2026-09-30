@@ -21,7 +21,9 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_default_retry_delay=60,
     task_max_retries=3,
+    beat_schedule={"dispatch-committed-jobs": {"task": "app.tasks.outbox.dispatch_outbox", "schedule": 5.0}},
 )
 
 # Explicitly import task modules so Celery registers them
+import app.tasks.outbox  # noqa: F401, E402
 import app.tasks.verification  # noqa: F401, E402

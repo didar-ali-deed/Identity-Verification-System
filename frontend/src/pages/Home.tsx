@@ -80,10 +80,10 @@ export default function Home() {
           <CheckCircle2 className="h-9 w-9 text-success mb-4" />
           <h2 className="text-base font-semibold text-foreground">Security First</h2>
           <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
-            Your data is encrypted and processed securely
+            Your application is accessible to you and authorized reviewers
           </p>
           <div className="flex items-center gap-1 mt-4 text-xs text-success font-medium">
-            <Lock className="h-3 w-3" /> AES-256 encrypted
+            <Lock className="h-3 w-3" /> Account access controls
           </div>
         </div>
 

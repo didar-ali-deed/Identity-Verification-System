@@ -18,7 +18,7 @@ logger = structlog.get_logger()
 
 # Thresholds
 DOC_LIVENESS_THRESHOLD = 0.35  # Below this = likely fake
-SELFIE_LIVENESS_THRESHOLD = 0.40
+SELFIE_LIVENESS_THRESHOLD = 0.65
 TAMPER_THRESHOLD = 0.65  # Above this = likely tampered
 
 
@@ -161,7 +161,9 @@ def detect_pixel_tampering(image_path: str) -> dict:
             clone_pairs = 0
             for match_pair in matches:
                 if len(match_pair) == 2:
-                    m, n = match_pair
+                    m = next((candidate for candidate in match_pair if candidate.queryIdx != candidate.trainIdx), None)
+                    if m is None:
+                        continue
                     if m.queryIdx != m.trainIdx and m.distance < 30:
                         # Check spatial distance — clones are far apart
                         pt1 = keypoints[m.queryIdx].pt
@@ -251,7 +253,12 @@ def check_selfie_liveness(selfie_path: str) -> dict:
         proportion_score = 1.0 if proportions.get("is_normal") else 0.5
         combined = 0.50 * lbp_score + 0.30 * validation_score + 0.20 * proportion_score
 
-        is_live = combined >= SELFIE_LIVENESS_THRESHOLD
+        is_live = bool(
+            selfie_check["is_valid"]
+            and proportions.get("is_normal")
+            and lbp_score > 0
+            and combined >= SELFIE_LIVENESS_THRESHOLD
+        )
 
         return {
             "score": round(combined, 4),
@@ -259,11 +266,14 @@ def check_selfie_liveness(selfie_path: str) -> dict:
             "validation_score": round(validation_score, 4),
             "proportion_score": round(proportion_score, 4),
             "is_live": is_live,
+            "verified": False,
+            "provider": "heuristic",
             "selfie_issues": selfie_check.get("issues", []),
             "detail": "Selfie liveness passed" if is_live else "Selfie liveness failed",
         }
     except Exception as e:
-        return {"score": 0.5, "is_live": True, "detail": f"Selfie liveness check failed: {e}"}
+        logger.warning("Selfie liveness unavailable", cause=type(e).__name__)
+        return {"score": 0.0, "is_live": False, "verified": False, "detail": "Selfie liveness check unavailable"}
 
 
 def _compute_doc_liveness_score(screen: dict, printout: dict, tamper: dict, zones: dict) -> float:
@@ -343,10 +353,30 @@ async def run_stage_1(ctx: PipelineContext) -> StageResult:
                 }
             )
 
+    # Document heuristics are screening signals, not proof of authenticity.
+    for label in ("passport", "national_id"):
+        data = details.get(f"{label}_liveness")
+        if data and any(
+            "failed" in str(value.get("detail", "")).lower() or "cannot read" in str(value.get("detail", "")).lower()
+            for value in data.values()
+            if isinstance(value, dict)
+        ):
+            flags.append({"flag_type": "document_check_unavailable", "detail": f"{label} screening unavailable"})
+
     # Selfie liveness
     if ctx.selfie_image_path:
-        selfie_result = check_selfie_liveness(ctx.selfie_image_path)
+        from app.config import get_settings
+
+        if get_settings().liveness_backend == "minifasnet":
+            from app.services.passive_liveness import check_frames
+
+            selfie_result = check_frames(ctx.selfie_frame_paths)
+        else:
+            selfie_result = check_selfie_liveness(ctx.selfie_image_path)
         details["selfie_liveness"] = selfie_result
+
+        if selfie_result.get("is_live") and not selfie_result.get("verified"):
+            flags.append({"flag_type": "liveness_unverified", "detail": "Heuristic liveness requires human review"})
 
         if not selfie_result.get("is_live"):
             hard_fail = True
@@ -362,9 +392,13 @@ async def run_stage_1(ctx: PipelineContext) -> StageResult:
                     "code": "SELFIE_LIVENESS_FAIL",
                     "stage": 1,
                     "severity": "critical",
-                    "message": "Selfie does not appear to be from a live person",
+                    "message": selfie_result.get("detail", "Selfie liveness could not be verified"),
                 }
             )
+    else:
+        passed = False
+        hard_fail = True
+        flags.append({"flag_type": "selfie_liveness_fail", "detail": "No selfie evidence available"})
 
     duration = (time.time() - start) * 1000
     result = StageResult(

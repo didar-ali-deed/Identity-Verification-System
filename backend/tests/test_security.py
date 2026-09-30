@@ -1,7 +1,5 @@
 import uuid
 
-import pytest
-
 from app.utils.security import (
     create_access_token,
     create_refresh_token,
@@ -63,3 +61,13 @@ def test_access_token_contains_role():
     admin_token = create_access_token(user_id, "admin")
     payload = decode_token(admin_token)
     assert payload["role"] == "admin"
+
+
+def test_password_limit_prevents_bcrypt_truncation():
+    import pytest
+    from pydantic import ValidationError
+
+    from app.schemas.auth import RegisterRequest
+
+    with pytest.raises(ValidationError, match="72 UTF-8 bytes"):
+        RegisterRequest(email="alex@example.com", password="Aa1" + "x" * 70, full_name="Alex Sample")

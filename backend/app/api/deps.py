@@ -49,7 +49,11 @@ async def get_current_user(
             detail="Invalid token payload",
         )
 
-    user = await get_user_by_id(db, uuid.UUID(user_id))
+    try:
+        parsed_id = uuid.UUID(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid token subject") from exc
+    user = await get_user_by_id(db, parsed_id)
     if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

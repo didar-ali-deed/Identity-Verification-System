@@ -6,6 +6,7 @@ the final pipeline decision: APPROVED, MANUAL_REVIEW, or REJECTED.
 
 from __future__ import annotations
 
+import math
 import time
 
 import structlog
@@ -26,6 +27,8 @@ def compute_decision(
     Priority: hard_reject → REJECTED, manual_review → MANUAL_REVIEW,
     then score thresholds.
     """
+    if not math.isfinite(weighted_total) or not 0 <= weighted_total <= 1:
+        return "REJECTED"
     if decision_override == "hard_reject":
         return "REJECTED"
 

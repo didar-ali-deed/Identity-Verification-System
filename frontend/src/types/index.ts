@@ -40,6 +40,7 @@ export interface ExtractedFields {
   document_number: string | null;
   expiry_date: string | null;
   nationality: string | null;
+  country_of_stay?: string | null;
   gender: string | null;
   national_id_number: string | null;
   father_name: string | null;
@@ -100,6 +101,7 @@ export interface IDVApplication {
   documents: Document[];
   face_match_score: number | null;
   face_is_match: boolean | null;
+  selfie_uploaded: boolean;
 }
 
 // Matches backend ApplicationListItem schema
@@ -171,6 +173,7 @@ export interface PipelineResult {
   flags: PipelineFlag[] | null;
   started_at: string | null;
   completed_at: string | null;
+  stage_results?: PipelineStageResult[] | null;
 }
 
 // Matches backend ApplicationDetailResponse schema

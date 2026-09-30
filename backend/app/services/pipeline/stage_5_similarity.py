@@ -10,6 +10,7 @@ Computes independent similarity scores across five channels:
 
 from __future__ import annotations
 
+import math
 import time
 
 import structlog
@@ -36,6 +37,7 @@ def compute_channel_a(ctx: PipelineContext) -> dict:
 
     scores = []
     comparisons = {}
+    expected = int(bool(ctx.passport_image_path)) + int(bool(ctx.id_image_path))
 
     for label, face_path in [
         ("passport", ctx.passport_face_path),
@@ -47,23 +49,31 @@ def compute_channel_a(ctx: PipelineContext) -> dict:
         try:
             result = compare_faces(ctx.selfie_image_path, face_path)
             sim = result.get("similarity_score", 0.0)
+            if not math.isfinite(sim) or not 0 <= sim <= 1:
+                raise FaceServiceError("Invalid face score")
             scores.append(sim)
             comparisons[f"selfie_vs_{label}"] = {
                 "similarity": sim,
                 "distance": result.get("distance"),
-                "verified": result.get("verified"),
+                "verified": result.get("verified") is True and result.get("is_match") is True,
             }
         except FaceServiceError as e:
             comparisons[f"selfie_vs_{label}"] = {"error": str(e.detail)}
 
-    if not scores:
-        return {"score": 0.0, "comparisons": comparisons, "detail": "No face comparisons succeeded"}
+    if not scores or len(scores) != expected or not all(r.get("verified") for r in comparisons.values()):
+        return {
+            "score": 0.0,
+            "comparisons": comparisons,
+            "verified": False,
+            "detail": "Every submitted identity document must have a successful face match",
+        }
 
     # Use the minimum score (weakest match is the bottleneck)
     final_score = min(scores)
 
     return {
         "score": round(final_score, 4),
+        "verified": True,
         "comparisons": comparisons,
         "detail": f"Biometric score {final_score:.4f} (min of {len(scores)} comparisons)",
     }
@@ -88,10 +98,10 @@ def compute_channel_b(ctx: PipelineContext) -> dict:
     if not passport_id or not id_card_id:
         # Only one document has ID number — can't cross-compare
         return {
-            "score": 1.0,
+            "score": 0.0,
             "passport_id": passport_id,
             "id_card_id": id_card_id,
-            "detail": "Single-document ID — no cross-compare needed",
+            "detail": "Insufficient identity-number evidence for cross-document comparison",
         }
 
     match = normalize_id_number(passport_id) == normalize_id_number(id_card_id)
@@ -124,8 +134,8 @@ def compute_channel_c(ctx: PipelineContext) -> dict:
 
     if not passport_name or not id_name:
         return {
-            "score": 1.0,
-            "detail": "Single-document name — no cross-compare needed",
+            "score": 0.0,
+            "detail": "Insufficient name evidence for cross-document comparison",
         }
 
     name_a = normalize_name(passport_name) or ""
@@ -171,19 +181,19 @@ def compute_channel_d(ctx: PipelineContext) -> dict:
 
     if not passport_father and not id_father:
         # Father's name not available in either — neutral score
-        return {"score": 1.0, "detail": "Father name not available — neutral"}
+        return {"score": 0.0, "detail": "Father name evidence unavailable"}
 
     if not passport_father or not id_father:
         return {
-            "score": 1.0,
-            "detail": "Single-document father name — no cross-compare needed",
+            "score": 0.0,
+            "detail": "Insufficient father name evidence for cross-document comparison",
         }
 
     name_a = normalize_father_name(passport_father) or ""
     name_b = normalize_father_name(id_father) or ""
 
     if not name_a or not name_b:
-        return {"score": 1.0, "detail": "Father names normalize to empty — neutral"}
+        return {"score": 0.0, "detail": "Father names normalize to empty"}
 
     lev_dist = _levenshtein(name_a, name_b)
     max_len = max(len(name_a), len(name_b))
@@ -216,8 +226,8 @@ def compute_channel_e(ctx: PipelineContext) -> dict:
 
     if not passport_dob or not id_dob:
         return {
-            "score": 1.0,
-            "detail": "Single-document DOB — no cross-compare needed",
+            "score": 0.0,
+            "detail": "Insufficient DOB evidence for cross-document comparison",
         }
 
     if passport_dob == id_dob:
@@ -273,6 +283,12 @@ async def run_stage_5(ctx: PipelineContext) -> StageResult:
     details["channel_e_dob"] = channel_e
     details["scores_summary"] = ctx.channel_scores
 
+    if not channel_a.get("verified"):
+        flags.append({"flag_type": "biometric_unverified", "detail": channel_a["detail"]})
+    for channel, key in ((channel_b, "match"), (channel_c, "passport_name"), (channel_e, "passport_dob")):
+        if key not in channel:
+            flags.append({"flag_type": "identity_evidence_missing", "detail": channel["detail"]})
+
     # Flag critical mismatches
     if channel_b["score"] == 0.0 and channel_b.get("match") is False:
         flags.append(
@@ -290,6 +306,10 @@ async def run_stage_5(ctx: PipelineContext) -> StageResult:
             }
         )
 
+    if channel_c.get("passport_name") and channel_c["score"] < 0.85:
+        flags.append({"flag_type": "name_mismatch", "detail": "Names differ across identity documents"})
+    if channel_e.get("passport_dob") and channel_e["score"] == 0 and not channel_e.get("transposition_detected"):
+        flags.append({"flag_type": "dob_mismatch", "detail": "Dates of birth do not match"})
     if channel_e.get("transposition_detected"):
         flags.append(
             {

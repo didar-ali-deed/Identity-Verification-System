@@ -16,9 +16,7 @@ async def test_admin_stats_unauthenticated(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_admin_detail_unauthenticated(client: AsyncClient):
-    response = await client.get(
-        "/api/v1/admin/applications/00000000-0000-0000-0000-000000000000"
-    )
+    response = await client.get("/api/v1/admin/applications/00000000-0000-0000-0000-000000000000")
     assert response.status_code == 401
 
 

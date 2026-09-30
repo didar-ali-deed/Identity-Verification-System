@@ -4,3 +4,5 @@ dist/
 .env.*
 !.env.example
 .eslintcache
+test-results/
+playwright-report/

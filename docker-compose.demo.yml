@@ -1,0 +1,6 @@
+name: idv-showcase
+services:
+  showcase:
+    build: ./frontend
+    ports:
+      - "${DEMO_PORT:-8081}:80"

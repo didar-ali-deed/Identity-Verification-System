@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -20,6 +20,14 @@ class ApplicationStatus(enum.StrEnum):
 
 class IDVApplication(Base):
     __tablename__ = "idv_applications"
+    __table_args__ = (
+        Index(
+            "uq_idv_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status IN ('PENDING', 'PROCESSING', 'READY_FOR_REVIEW', 'ERROR')"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(

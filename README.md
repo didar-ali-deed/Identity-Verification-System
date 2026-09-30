@@ -1,250 +1,175 @@
-# Identity Verification System (IDV)
+# Identity Verification System
 
-A full-stack Identity Verification System that demonstrates a multi-stage AI pipeline for document verification, biometric matching, fraud screening and automated decision support.
--
+[![CI](https://github.com/didar-ali-deed/Identity-Verification-System/actions/workflows/ci.yml/badge.svg)](https://github.com/didar-ali-deed/Identity-Verification-System/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB)
+![React](https://img.shields.io/badge/React-19-61DAFB)
+![License](https://img.shields.io/badge/source-MIT-green)
 
-## What It Does
+**AI-assisted identity verification with an evidence trail for every decision.**
 
-Users submit their identity documents (passport, national ID) and a live selfie. The system runs them through a 10-stage verification pipeline that checks document authenticity, extracts and cross-validates all fields, screens against watchlists, computes a biometric similarity score, and produces an automated decision — **Approved**, **Manual Review**, or **Rejected**.
+Users submit identity documents and camera frames. A ten-stage pipeline extracts and compares fields, checks biometric and liveness evidence, screens an internal watchlist, and produces an approval, review referral or rejection. Reviewers can inspect the saved evidence and record an auditable decision.
 
-Admins review flagged applications through a dashboard with full pipeline breakdown, stage-by-stage results, and channel scores.
+Research and demonstration software. No production KYC certification or measured model accuracy is claimed.
 
----
+![Synthetic verification dashboard](docs/screenshots/approved.png)
 
-## 10-Stage Verification Pipeline
+[Watch the short demo recording](docs/demo.webm) · [Review scenario](docs/screenshots/review.png) · [Failure scenario](docs/screenshots/unavailable.png) · [Mobile preview](docs/screenshots/mobile.png)
 
-| Stage | Name | Description |
-|-------|------|-------------|
-| 0 | Document Acceptance Gate | Classifies document type (TD1/TD2/TD3), validates issuing country against approved list, checks document class eligibility |
-| 1 | Liveness & Anti-Spoofing | Detects screen replay (FFT moiré), printout attacks (halftone), pixel tampering (ELA + ORB), selfie liveness (LBP texture) |
-| 2 | Dual-Zone Field Extraction | Extracts MRZ (ICAO 9303 check digits) and VIZ fields from passport and national ID front/back |
-| 3 | Normalization & Cross-Zone Consistency | Normalizes dates, names (ICAO transliteration), ID numbers; cross-validates VIZ vs MRZ; hard-fails on expired documents |
-| 4 | Fraud & Watchlist Screening | Exact ID number + fuzzy name match against watchlist; duplicate application detection; velocity limiting; form data consistency |
-| 5 | 5-Channel Similarity Scoring | Biometric face (DeepFace), ID number match, name Jaccard+Levenshtein, father name edit distance, DOB binary match |
-| 6 | Weighted Score Synthesis | `0.40A + 0.25B + 0.15C + 0.10D + 0.10E` → weighted total [0.0, 1.0] |
-| 7 | Hard-Rule Override Layer | 11 rules evaluated; worst outcome wins — id mismatch, liveness fail, watchlist hit all trigger hard overrides |
-| 8 | Decision Matrix | ≥ 0.90 → Approved · 0.75–0.89 → Manual Review · < 0.75 → Rejected |
-| 9 | Result & Audit Trail | Persists immutable pipeline result, updates application status, stores per-document metadata |
+## Try the showcase in two minutes
 
-**Hard-fail bypass:** Stages 0, 1, and 3 can hard-fail and skip directly to Stage 7→8→9, bypassing scoring when documents are fundamentally invalid.
+The public demo uses synthetic identities and illustrative scores. It runs without an account, backend, database, model downloads or personal documents.
 
----
-
-## Similarity Channels
-
-| Channel | Signal | Weight |
-|---------|--------|--------|
-| A | Biometric face match (selfie vs passport + selfie vs ID) | 40% |
-| B | ID number exact match | 25% |
-| C | Full name — Jaccard token overlap + normalized Levenshtein | 15% |
-| D | Father's name edit distance | 10% |
-| E | Date of birth binary match + single-digit transposition detection | 10% |
-
----
-
-## Tech Stack
-
-### Backend
-- **FastAPI** — async REST API (Python 3.12)
-- **PostgreSQL** — primary database with SQLAlchemy ORM + Alembic migrations
-- **Redis** — session cache and Celery broker
-- **Celery** — async task queue for pipeline execution
-- **EasyOCR** — multi-language OCR for field extraction
-- **DeepFace** — biometric face similarity (VGG-Face / ArcFace backends)
-- **face_recognition** — face detection and cropping
-- **OpenCV / NumPy** — liveness detection (FFT, ELA, LBP, ORB)
-- **structlog** — structured JSON logging
-
-### Frontend
-- **React 18** with TypeScript (strict mode)
-- **Tailwind CSS** + shadcn/ui — component library
-- **React Query** — server state management
-- **React Router v6** — routing
-- **Zustand** — auth state
-- **Axios** — HTTP client with JWT interceptors
-- **react-webcam** — live selfie capture
-
-### Infrastructure
-- **Docker** + **Docker Compose** — full stack containerization
-- **Nginx** — reverse proxy
-- **GitHub Actions** — CI/CD pipeline
-
----
-
-## Features
-
-### User Flow
-- Register / login with JWT authentication (access + refresh token rotation)
-- Submit IDV application with document type selection
-- Upload passport or national ID photo
-- Capture live selfie via webcam
-- Track application status through 10-stage progress view
-
-### Admin Dashboard
-- View all applications with status filters and pagination
-- Full pipeline breakdown per application — stage results, flags, reason codes
-- 5-channel similarity scores with visual bar chart
-- Weighted total score and final decision badge
-- Approve / reject applications with audit log
-- Manage approved countries, document class rules, and watchlist entries
-
-### Security
-- Passwords hashed with bcrypt (12 rounds)
-- JWT tokens — 30 min access, 7 day refresh with rotation
-- Rate limiting on auth endpoints
-- File upload validation — JPEG/PNG only, 10 MB max, dimension check
-- CORS restricted to known origins
-- All queries parameterized via SQLAlchemy ORM
-
----
-
-## Database Tables
-
-| Table | Purpose |
-|-------|---------|
-| `users` | Authentication, roles (user/admin) |
-| `idv_applications` | Application lifecycle and pipeline decision |
-| `documents` | Uploaded files, OCR data, normalized fields, liveness scores |
-| `face_verifications` | Selfie vs document face match results |
-| `pipeline_results` | Immutable per-stage JSON results, channel scores, flags |
-| `watchlist_entries` | Fraud screening — ID numbers and names |
-| `approved_countries` | Country-level acceptance gate |
-| `document_class_rules` | Per-country document type eligibility |
-| `audit_logs` | Admin action trail |
-
----
-
-## API Endpoints
-
-```
-POST   /api/v1/auth/register
-POST   /api/v1/auth/login
-POST   /api/v1/auth/refresh
-
-POST   /api/v1/idv/submit
-GET    /api/v1/idv/status
-POST   /api/v1/idv/upload-document
-POST   /api/v1/idv/upload-selfie
-GET    /api/v1/idv/pipeline-result
-
-GET    /api/v1/admin/applications
-GET    /api/v1/admin/applications/:id
-PATCH  /api/v1/admin/applications/:id
-GET    /api/v1/admin/stats
-GET    /api/v1/admin/pipeline/countries
-POST   /api/v1/admin/pipeline/countries
-DELETE /api/v1/admin/pipeline/countries/:code
-GET    /api/v1/admin/pipeline/rules
-POST   /api/v1/admin/pipeline/rules
-DELETE /api/v1/admin/pipeline/rules/:id
-GET    /api/v1/admin/pipeline/watchlist
-POST   /api/v1/admin/pipeline/watchlist
-DELETE /api/v1/admin/pipeline/watchlist/:id
-
-GET    /api/v1/health
-```
-
----
-
-## Getting Started
-
-### Prerequisites
-- Docker & Docker Compose
-- Node.js 20.19+ or 22.12+ (for local frontend dev)
-- Python 3.12+ (for local backend dev)
-
-### Run with Docker
-
-```powershell
-Copy-Item .env.example .env
-# Replace JWT_SECRET_KEY with a unique random value before deployment.
-docker compose up --build
-```
-
-The app is available at `http://localhost` through Nginx. The Compose setup uses CPU PyTorch by default; it does not require an NVIDIA GPU.
-The OCR model downloads on first document processing and remains cached in the `hf_cache` volume.
-For production, set `ENVIRONMENT=production` and use a unique `JWT_SECRET_KEY` in `.env`.
-
-API docs: `http://localhost/api/docs`
-
-### Local Development
-
-```powershell
-# From the repository root; Python 3.12 is required.
-py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-.venv\Scripts\python.exe -m pip install -r backend\requirements.txt -r backend\requirements-ml.txt
-docker compose up -d postgres redis
-Copy-Item .env.example backend\.env
-
-# Terminal 1: from the repository root
-cd backend
-..\.venv\Scripts\python.exe -m alembic upgrade head
-..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
-
-# Terminal 2: open a new terminal at the repository root
-cd backend
-..\.venv\Scripts\python.exe -m celery -A app.tasks worker --loglevel=info --pool=solo
-
-# Terminal 3: open another new terminal at the repository root
+```bash
 cd frontend
 npm ci
-npm run dev -- --host 0.0.0.0
+npm run dev
 ```
 
-Open `http://localhost:5173`. API docs are at `http://localhost:8000/api/docs`.
+Open **http://localhost:5173/demo**. Switch between approval, OCR review, identity mismatch and unavailable liveness. Expand stages to inspect their evidence.
 
-### Environment Variables
+Docker alternative:
 
-```env
-DATABASE_URL=postgresql+asyncpg://idv_user:idv_password@localhost:5432/idv_db
-REDIS_URL=redis://localhost:6379/0
-JWT_SECRET_KEY=<generate with: openssl rand -hex 32>
-JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
-REFRESH_TOKEN_EXPIRE_DAYS=7
-UPLOAD_DIR=./uploads
-MAX_FILE_SIZE_MB=10
-FACE_SIMILARITY_THRESHOLD=0.6
-FRAUD_SCORE_THRESHOLD=0.7
-PIPELINE_MODE=god
-PIPELINE_PASS_THRESHOLD=0.90
-PIPELINE_REVIEW_THRESHOLD=0.75
+```bash
+docker compose -f docker-compose.demo.yml up --build -d
 ```
 
----
+Open **http://localhost:8081/demo**.
 
-## Project Structure
+## What makes the pipeline different
 
+- **Evidence before approval:** missing or failed face/liveness checks cannot be rescued by an aggregate score.
+- **Multi-frame passive liveness:** optional MiniFASNet checks every frame; heuristic-only liveness requires review.
+- **Document OCR:** EasyOCR detects and reads text on patterned documents. Missing or low-confidence fields require review.
+- **Explainable decisions:** all completed stages, channel scores, flags, rule overrides and reasons are saved for users and reviewers.
+- **Retries preserve decisions:** the application is locked while processing; replay returns its existing result.
+- **Transactional job dispatch:** a PostgreSQL outbox prevents workers from racing uncommitted uploads.
+- **Owned applications:** account authentication, role checks and application ownership protect read and write routes.
+- **Replace unreadable documents:** resume a draft and upload a better capture before processing. Replacement clears old evidence and uses a fresh ID to isolate stale OCR jobs.
+- **Phone capture:** an expiring, atomically consumed link supports camera capture on a second device.
+- **Review safeguards:** reviewers can act only on review-ready applications; concurrent actions are serialized.
+- **Reproducible checks:** backend regression/integration tests, desktop/mobile browser tests, lint, builds and dependency audits run in CI.
+
+## Pipeline
+
+| Stage | Evidence or action |
+|---|---|
+| 0 | Document classification, issuing-country registry and eligibility |
+| 1 | Document screening and selfie passive liveness |
+| 2 | OCR extraction, MRZ check digits and field confidence |
+| 3 | Normalization, cross-zone consistency and expiry |
+| 4 | Internal watchlist, duplicate and submission-velocity screening |
+| 5 | Face, identity-number, name, father-name and DOB comparisons |
+| 6 | Weighted synthesis: 40% face, 25% ID, 15% name, 10% father name, 10% DOB |
+| 7 | Mandatory evidence gates and deterministic rule overrides |
+| 8 | Approval, manual review or rejection |
+| 9 | Saved evidence, application status and audit event |
+
+Default score thresholds: **approval ≥0.90**, **review ≥0.75**, otherwise rejection. Rules take precedence. Missing comparison fields earn no perfect-match credit. An internal watchlist match requires human review.
+
+The default CPU configuration uses heuristic liveness, so it cannot automatically approve. Configure a learned liveness model to exercise the automated approval path with real inputs; see [model setup](docs/models.md).
+
+## Run the full application
+
+Requirements: Docker Desktop, or Python 3.12 and Node.js 22 for local development.
+
+On Windows:
+
+```powershell
+.\scripts\start.ps1
 ```
-project/
-├── backend/
-│   ├── app/
-│   │   ├── api/              # Route handlers (idv, admin, auth)
-│   │   ├── models/           # SQLAlchemy ORM models
-│   │   ├── schemas/          # Pydantic request/response schemas
-│   │   ├── services/
-│   │   │   ├── pipeline/     # 10-stage pipeline (stage_0 → stage_9)
-│   │   │   ├── idv_service.py
-│   │   │   ├── ocr_service.py
-│   │   │   ├── face_service.py
-│   │   │   └── fraud_service.py
-│   │   └── tasks/            # Celery async tasks
-│   └── alembic/              # Database migrations
-├── frontend/
-│   └── src/
-│       ├── api/              # React Query hooks
-│       ├── components/       # UI components + PipelineBreakdown
-│       ├── pages/            # IDVSubmission, IDVStatus, AdminDashboard
-│       └── types/            # TypeScript interfaces
-├── nginx/
-│   └── nginx.conf
-└── docker-compose.yml
+
+The script creates a private signing key if `.env` is missing, validates Compose, builds services and runs migrations. Existing configuration is preserved.
+
+On other platforms:
+
+```bash
+cp .env.example .env
+# Set JWT_SECRET_KEY to a unique random secret, e.g. openssl rand -hex 32.
+docker compose up --build -d
 ```
 
----
+| Service | Default local address |
+|---|---|
+| Application | http://localhost:8080 |
+| API documentation | http://localhost:18000/api/docs |
+| PostgreSQL | localhost:55432 |
+| Redis | localhost:56379 |
 
-## License
+Ports are configurable in `.env`. PostgreSQL, Redis and direct API ports bind to localhost. The development database credentials and HTTP proxy are for local use.
 
-MIT
-# Identity-Verification-System
+Register a user in the application.
+
+For an OCR smoke test, register with the fictional profile name **Alex Sample**, open verification, and download the clearly marked passport and CNIC specimens from the form. Upload those images and inspect Document Review. These specimens are for extraction testing and should not establish identity or liveness. **Reset verification** on the form or status page deletes that verification's records/files and starts a new draft while keeping your account; it requires confirmation and is disabled during processing.
+
+Create an administrator with a hidden password prompt:
+
+```bash
+docker compose exec backend python -m app.cli create-admin --email reviewer@example.com --name Reviewer
+```
+
+There are no default administrator credentials. First real inference downloads model assets. Camera capture on a phone requires an HTTPS address reachable from both devices.
+
+See [development setup and operations](docs/development.md) for local Python commands, worker/Beat startup and migration notes.
+
+## Stack and architecture
+
+React 19, TypeScript, Vite, Tailwind CSS, TanStack Query and Zustand; FastAPI, SQLAlchemy, Alembic, PostgreSQL, Redis and Celery; EasyOCR, MediaPipe and DeepFace by default; optional InsightFace and MiniFASNet.
+
+```mermaid
+flowchart LR
+    Browser[React and phone camera] --> API[FastAPI]
+    API --> DB[(PostgreSQL and task outbox)]
+    API --> Files[Private upload volume]
+    DB --> Dispatcher[Celery Beat and dispatcher]
+    Dispatcher --> Redis[(Redis)]
+    Redis --> Worker[Verification worker]
+    Files --> Worker
+    Worker --> Evidence[Stages, decisions and audit]
+    Evidence --> DB
+    DB --> Review[User status and admin review]
+```
+
+[Detailed architecture and limitations](docs/architecture.md) · [API examples](docs/api-examples.http) · [Model configuration and licenses](docs/models.md)
+
+## Checks
+
+```powershell
+.venv\Scripts\python.exe -m ruff check backend\app backend\tests
+.venv\Scripts\python.exe -m ruff format --check backend\app backend\tests
+.venv\Scripts\python.exe -m pytest backend\tests -q
+cd frontend
+npm run lint
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+Database integration tests are skipped unless `IDV_INTEGRATION_TESTS=1` and a migrated, dedicated test database is configured. CI enables them. Browser tests cover every demo outcome, evidence expansion, responsive layouts and three-frame phone capture.
+
+Tests use synthetic identities and model outputs. They verify application behavior, not real-world biometric or OCR accuracy.
+
+See the [local upgrade validation report](docs/upgrade-validation.md) for the checks performed on this upgrade.
+
+## Repository
+
+```text
+backend/app/
+  api/                 authentication, uploads, ownership and review
+  services/pipeline/   verification stages and saved evidence
+  services/            OCR, biometric and passive liveness adapters
+  models/              application, evidence, audit and job outbox
+  tasks/               worker tasks and committed-job dispatcher
+backend/tests/         regressions and PostgreSQL integration tests
+frontend/src/          user/admin flows and synthetic demo
+frontend/e2e/          desktop and mobile browser tests
+scripts/               startup, model preparation and showcase capture
+docs/                  architecture, setup, screenshots and recording
+```
+
+## License and scope
+
+Application source is [MIT](LICENSE). Model weights have separate terms; InsightFace's supplied pretrained models are for non-commercial research. See [model licensing notes](docs/models.md).
+
+Document authenticity checks remain heuristic. Server-verified active challenges, automatic retention, object-storage deployment and webhooks are future work. See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+
+Run and check: [run guide](docs/run-guide.md). Next work: [improvement plan](docs/improvement-plan.md).

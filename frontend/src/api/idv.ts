@@ -1,7 +1,21 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import api from "./client";
-import type { IDVApplication, DocumentType, ExtractedFields } from "@/types";
+import type { IDVApplication, DocumentType, ExtractedFields, PipelineResult } from "@/types";
+
+export function useResetVerification() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (applicationId: string) => {
+      const { data } = await api.post<SubmitResponse>(`/idv/reset?application_id=${applicationId}`);
+      return data;
+    },
+    onSuccess: async () => {
+      await queryClient.cancelQueries();
+      queryClient.clear();
+    },
+  });
+}
 
 interface SubmitResponse {
   id: string;
@@ -59,7 +73,7 @@ export function useUploadDocument() {
       formData.append("file", file);
 
       const { data } = await api.post<DocumentUploadResponse>(
-        `/idv/upload-document?application_id=${applicationId}&doc_type=${docType}`,
+        `/idv/upload-document?application_id=${applicationId}&doc_type=${docType}&replace_existing=true`,
         formData,
         { headers: { "Content-Type": "multipart/form-data" } },
       );
@@ -94,12 +108,15 @@ export function useUploadSelfie() {
     mutationFn: async ({
       file,
       applicationId,
+      frames = [],
     }: {
       file: File;
       applicationId: string;
+      frames?: File[];
     }) => {
       const formData = new FormData();
       formData.append("file", file);
+      frames.forEach(frame => formData.append("frames", frame));
 
       const { data } = await api.post(
         `/idv/upload-selfie?application_id=${applicationId}`,
@@ -150,6 +167,7 @@ export function useGetMobileSelfieToken() {
 }
 
 type PipelineResultResponse = {
+  pipeline_result: PipelineResult | null;
   application_id: string;
   pipeline_version: string | null;
   pipeline_decision: string | null;
