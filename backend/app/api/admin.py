@@ -30,6 +30,7 @@ from app.schemas.pipeline import (
     WatchlistEntryCreate,
     WatchlistEntryResponse,
 )
+from app.services.pipeline.serialization import serialize_result
 
 settings = get_settings()
 logger = structlog.get_logger()
@@ -123,30 +124,7 @@ async def get_application_detail(
     pipeline_data = None
     if application.pipeline_result:
         pr = application.pipeline_result
-        pipeline_data = {
-            "id": pr.id,
-            "pipeline_version": pr.pipeline_version,
-            "stage_0_result": pr.stage_0_result,
-            "stage_1_result": pr.stage_1_result,
-            "stage_2_result": pr.stage_2_result,
-            "stage_3_result": pr.stage_3_result,
-            "stage_4_result": pr.stage_4_result,
-            "channel_scores": {
-                "channel_a": pr.channel_a_score,
-                "channel_b": pr.channel_b_score,
-                "channel_c": pr.channel_c_score,
-                "channel_d": pr.channel_d_score,
-                "channel_e": pr.channel_e_score,
-            },
-            "weighted_total": pr.weighted_total,
-            "hard_rules_result": pr.hard_rules_result,
-            "decision_override": pr.decision_override,
-            "final_decision": pr.final_decision,
-            "reason_codes": pr.reason_codes,
-            "flags": pr.flags,
-            "started_at": pr.started_at,
-            "completed_at": pr.completed_at,
-        }
+        pipeline_data = serialize_result(pr)
 
     return {
         "id": application.id,
@@ -176,17 +154,13 @@ async def review_application(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ) -> dict:
-    result = await db.execute(select(IDVApplication).where(IDVApplication.id == application_id))
+    result = await db.execute(select(IDVApplication).where(IDVApplication.id == application_id).with_for_update())
     application = result.scalar_one_or_none()
 
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
 
-    if application.status not in (
-        ApplicationStatus.READY_FOR_REVIEW,
-        ApplicationStatus.PENDING,
-        ApplicationStatus.PROCESSING,
-    ):
+    if application.status not in (ApplicationStatus.READY_FOR_REVIEW,):
         raise HTTPException(
             status_code=409,
             detail=f"Application cannot be reviewed in '{application.status.value}' state",

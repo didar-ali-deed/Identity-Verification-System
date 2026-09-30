@@ -3,24 +3,24 @@ from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_kyc_submit_unauthenticated(client: AsyncClient):
-    response = await client.post("/api/v1/kyc/submit")
+async def test_idv_submit_unauthenticated(client: AsyncClient):
+    response = await client.post("/api/v1/idv/submit")
     assert response.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_kyc_status_unauthenticated(client: AsyncClient):
-    response = await client.get("/api/v1/kyc/status")
+async def test_idv_status_unauthenticated(client: AsyncClient):
+    response = await client.get("/api/v1/idv/status")
     assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_upload_document_unauthenticated(client: AsyncClient):
-    response = await client.post("/api/v1/kyc/upload-document")
+    response = await client.post("/api/v1/idv/upload-document")
     assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_upload_selfie_unauthenticated(client: AsyncClient):
-    response = await client.post("/api/v1/kyc/upload-selfie")
+    response = await client.post("/api/v1/idv/upload-selfie")
     assert response.status_code == 401

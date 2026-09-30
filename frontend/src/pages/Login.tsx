@@ -134,7 +134,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-xs text-muted-foreground/40 mt-6">
-          Protected by 256-bit AES encryption
+          <Link to="/demo" className="text-primary hover:underline">Explore the synthetic demo</Link>
         </p>
       </div>
     </div>

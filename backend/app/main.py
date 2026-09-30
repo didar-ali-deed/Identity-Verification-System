@@ -45,8 +45,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="1.0.0",
-    description="Production-grade Identity Verification System API",
+    version="2.0.0",
+    description="Identity verification with explainable decisions and server-produced evidence",
     docs_url="/api/docs" if not settings.is_production else None,
     redoc_url="/api/redoc" if not settings.is_production else None,
     openapi_url="/api/openapi.json" if not settings.is_production else None,
@@ -64,10 +64,10 @@ app.include_router(admin_router, prefix=settings.api_v1_prefix)
 
 
 @app.get("/api/v1/health", tags=["Health"])
-async def health_check() -> dict:
+async def health_check() -> JSONResponse:
     health = {
         "status": "healthy",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "environment": settings.environment,
         "checks": {},
     }
@@ -90,14 +90,16 @@ async def health_check() -> dict:
         import redis.asyncio as aioredis
 
         r = aioredis.from_url(settings.redis_url)
-        await r.ping()
-        await r.aclose()
+        try:
+            await r.ping()
+        finally:
+            await r.aclose()
         health["checks"]["redis"] = "connected"
     except Exception:
         health["checks"]["redis"] = "unavailable"
         health["status"] = "degraded"
 
-    return health
+    return JSONResponse(status_code=200 if health["status"] == "healthy" else 503, content=health)
 
 
 @app.exception_handler(Exception)
@@ -105,7 +107,7 @@ async def global_exception_handler(request, exc):
     logger = structlog.get_logger()
     await logger.aerror(
         "Unhandled exception",
-        path=str(request.url),
+        path="/api/v1/idv/mobile-upload/[redacted]" if "/mobile-upload/" in request.url.path else request.url.path,
         method=request.method,
         error=str(exc),
     )

@@ -11,9 +11,11 @@ const CHANNEL_CONFIG = [
 interface ChannelScoresChartProps {
   scores: PipelineChannelScores;
   weightedTotal: number | null;
+  passThreshold?: number;
+  reviewThreshold?: number;
 }
 
-export default function ChannelScoresChart({ scores, weightedTotal }: ChannelScoresChartProps) {
+export default function ChannelScoresChart({ scores, weightedTotal, passThreshold = 0.90, reviewThreshold = 0.75 }: ChannelScoresChartProps) {
   return (
     <div className="space-y-4">
       {CHANNEL_CONFIG.map(({ key, label, weight, color }) => {
@@ -62,8 +64,8 @@ export default function ChannelScoresChart({ scores, weightedTotal }: ChannelSco
             </span>
             <span
               className={`text-xl font-bold ${
-                weightedTotal >= 0.90 ? "text-emerald-400" :
-                weightedTotal >= 0.75 ? "text-amber-400" :
+                weightedTotal >= passThreshold ? "text-emerald-400" :
+                weightedTotal >= reviewThreshold ? "text-amber-400" :
                 "text-red-400"
               }`}
               style={{ fontFamily: "JetBrains Mono, monospace" }}
@@ -74,17 +76,17 @@ export default function ChannelScoresChart({ scores, weightedTotal }: ChannelSco
           <div className="w-full bg-muted rounded-full h-3">
             <div
               className={`h-3 rounded-full transition-all ${
-                weightedTotal >= 0.90 ? "bg-emerald-500" :
-                weightedTotal >= 0.75 ? "bg-amber-500" :
+                weightedTotal >= passThreshold ? "bg-emerald-500" :
+                weightedTotal >= reviewThreshold ? "bg-amber-500" :
                 "bg-red-500"
               }`}
               style={{ width: `${Math.min(weightedTotal * 100, 100)}%` }}
             />
           </div>
           <div className="flex justify-between text-xs text-muted-foreground mt-1.5">
-            <span>Reject &lt;75%</span>
-            <span>Review 75–90%</span>
-            <span>Pass ≥90%</span>
+            <span>Reject &lt;{reviewThreshold * 100}%</span>
+            <span>Review {reviewThreshold * 100}–{passThreshold * 100}%</span>
+            <span>Pass ≥{passThreshold * 100}%</span>
           </div>
         </div>
       )}

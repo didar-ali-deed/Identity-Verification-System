@@ -15,8 +15,8 @@ class RegisterRequest(BaseModel):
     def validate_password_strength(cls, v: str) -> str:
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
-        if len(v) > 128:
-            raise ValueError("Password must not exceed 128 characters")
+        if len(v.encode("utf8")) > 72:
+            raise ValueError("Password must not exceed 72 UTF-8 bytes")
         if not re.search(r"[A-Z]", v):
             raise ValueError("Password must contain at least one uppercase letter")
         if not re.search(r"[a-z]", v):

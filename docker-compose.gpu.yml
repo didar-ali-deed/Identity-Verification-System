@@ -1,0 +1,10 @@
+# Use with docker-compose.yml; requires NVIDIA Container Toolkit on the Docker host.
+services:
+  backend:
+    gpus: all
+    environment:
+      INFERENCE_USE_GPU: "true"
+  celery-worker:
+    gpus: all
+    environment:
+      INFERENCE_USE_GPU: "true"

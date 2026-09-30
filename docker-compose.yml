@@ -1,3 +1,41 @@
+name: identity-verification-system
+
+x-runtime: &runtime
+  DATABASE_URL: postgresql+asyncpg://idv_user:idv_password@postgres:5432/idv_db
+  REDIS_URL: redis://redis:6379/0
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Run scripts/start.ps1 or set JWT_SECRET_KEY in .env}
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  DEBUG: "false"
+  UPLOAD_DIR: /app/uploads
+  ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
+  PIPELINE_MODE: god
+  PIPELINE_PASS_THRESHOLD: ${PIPELINE_PASS_THRESHOLD:-0.90}
+  PIPELINE_REVIEW_THRESHOLD: ${PIPELINE_REVIEW_THRESHOLD:-0.75}
+  OCR_BACKEND: ${OCR_BACKEND:-easyocr}
+  FACE_BACKEND: ${FACE_BACKEND:-deepface}
+  FACE_MODEL: ${FACE_MODEL:-Facenet}
+  INFERENCE_USE_GPU: ${INFERENCE_USE_GPU:-false}
+  LIVENESS_BACKEND: ${LIVENESS_BACKEND:-heuristic}
+  LIVENESS_THRESHOLD: ${LIVENESS_THRESHOLD:-0.75}
+
+x-api: &api
+  build:
+    context: ./backend
+    args:
+      TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+      INSTALL_ENHANCED: ${INSTALL_ENHANCED:-false}
+  environment: *runtime
+  volumes:
+    - upload_data:/app/uploads
+    - model_cache:/root/.cache
+    - insightface_cache:/root/.insightface
+    - ./backend/third_party:/app/third_party:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -8,104 +46,72 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U idv_user -d idv_db"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   redis:
     image: redis:7-alpine
+    command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${REDIS_PORT:-56379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   backend:
-    build:
-      context: ./backend
-      args:
-        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
-    environment:
-      DATABASE_URL: postgresql+asyncpg://idv_user:idv_password@postgres:5432/idv_db
-      REDIS_URL: redis://redis:6379/0
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      JWT_ALGORITHM: HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: "30"
-      REFRESH_TOKEN_EXPIRE_DAYS: "7"
-      UPLOAD_DIR: /app/uploads
-      MAX_FILE_SIZE_MB: "10"
-      FACE_SIMILARITY_THRESHOLD: "0.6"
-      FRAUD_SCORE_THRESHOLD: "0.7"
-      ALLOWED_ORIGINS: "http://localhost,http://localhost:80,http://localhost:5173"
-      PYTHONIOENCODING: utf-8
-    volumes:
-      - upload_data:/app/uploads
-      - hf_cache:/root/.cache/huggingface
+    <<: *api
     ports:
-      - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      - "127.0.0.1:${API_PORT:-18000}:8000"
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
   celery-worker:
-    build:
-      context: ./backend
-      args:
-        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
-    environment:
-      DATABASE_URL: postgresql+asyncpg://idv_user:idv_password@postgres:5432/idv_db
-      REDIS_URL: redis://redis:6379/0
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      JWT_ALGORITHM: HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: "30"
-      REFRESH_TOKEN_EXPIRE_DAYS: "7"
-      UPLOAD_DIR: /app/uploads
-      MAX_FILE_SIZE_MB: "10"
-      FACE_SIMILARITY_THRESHOLD: "0.6"
-      FRAUD_SCORE_THRESHOLD: "0.7"
-      ALLOWED_ORIGINS: "http://localhost,http://localhost:80,http://localhost:5173"
-      PYTHONIOENCODING: utf-8
-    volumes:
-      - upload_data:/app/uploads
-      - hf_cache:/root/.cache/huggingface
+    <<: *api
     depends_on:
-      postgres:
+      backend:
         condition: service_healthy
-      redis:
+    command: celery -A app.tasks worker --loglevel=info --concurrency=1
+
+  celery-beat:
+    <<: *api
+    depends_on:
+      backend:
         condition: service_healthy
-    command: celery -A app.tasks worker --loglevel=info --concurrency=2
+    command: celery -A app.tasks beat --loglevel=info --schedule=/tmp/celerybeat-schedule
 
   frontend:
     build: ./frontend
-    depends_on:
-      - backend
+    volumes:
+      - ./docs/samples:/usr/share/nginx/html/samples:ro
 
   nginx:
     image: nginx:alpine
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "80:80"
+      - "${HTTP_PORT:-8080}:80"
     depends_on:
-      - backend
-      - frontend
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
 
 volumes:
   postgres_data:
   redis_data:
   upload_data:
-  hf_cache:
+  model_cache:
+  insightface_cache:

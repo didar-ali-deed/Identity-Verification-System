@@ -27,6 +27,7 @@ class PipelineResult(Base):
     stage_2_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     stage_3_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     stage_4_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    stage_results: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
 
     # Channel scores (Stage 5)
     channel_a_score: Mapped[float | None] = mapped_column(Float, nullable=True)

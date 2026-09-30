@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -19,6 +19,7 @@ class FaceVerification(Base):
         index=True,
     )
     selfie_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    frame_paths: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     document_face_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

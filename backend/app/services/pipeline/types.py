@@ -85,6 +85,7 @@ class PipelineContext:
     passport_image_path: str | None = None
     id_image_path: str | None = None
     selfie_image_path: str | None = None
+    selfie_frame_paths: list[str] = field(default_factory=list)
 
     # Document classification (Stage 0)
     passport_doc_class: str | None = None  # "TD3"

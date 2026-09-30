@@ -80,6 +80,12 @@ def normalize_date(raw_date: str | None) -> str | None:
     if not raw_date:
         return None
 
+    if re.fullmatch(r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}", raw_date.strip()):
+        from app.services.ocr_service import _parse_date_string
+
+        parsed = _parse_date_string(raw_date)
+        return parsed.strftime("%Y%m%d") if parsed else None
+
     raw = raw_date.strip().replace(" ", "")
 
     # Already canonical YYYYMMDD
@@ -425,6 +431,10 @@ async def run_stage_3(ctx: PipelineContext) -> StageResult:
         ("national_id", ctx.normalized_id),
     ]:
         expiry = normalized.get("expiry_date") if normalized else None
+        if not normalized:
+            continue
+        if not expiry or check_expiry_gate(expiry).get("days_remaining") is None:
+            flags.append({"flag_type": "expiry_unverified", "detail": f"{label} expiry is missing or invalid"})
         if expiry:
             expiry_check = check_expiry_gate(expiry)
             details[f"{label}_expiry"] = expiry_check

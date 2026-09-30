@@ -2,14 +2,14 @@ import secrets
 import uuid
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, get_db
 from app.config import get_settings
-from app.models.idv_application import IDVApplication
+from app.models.idv_application import ApplicationStatus, IDVApplication
 from app.models.user import User
 from app.schemas.document import DocumentUploadResponse
 from app.schemas.idv import IDVStatusResponse
@@ -17,15 +17,28 @@ from app.services.idv_service import (
     IDVServiceError,
     create_application,
     get_user_application,
+    reset_verification,
     upload_document,
     upload_selfie,
 )
+from app.services.pipeline.serialization import serialize_result
 
 settings = get_settings()
 router = APIRouter(prefix="/idv", tags=["IDV"])
 
 # Mobile selfie token TTL (10 minutes)
 _MOBILE_TOKEN_TTL = 600
+
+
+@router.post("/reset", response_model=IDVStatusResponse, status_code=201)
+async def reset_application(
+    application_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> dict:
+    try:
+        fresh = await reset_verification(db, application_id, current_user.id)
+        return {"id": fresh.id, "status": fresh.status.value, "submitted_at": fresh.submitted_at, "documents": []}
+    except IDVServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
 
 
 @router.post("/submit", response_model=IDVStatusResponse, status_code=201)
@@ -70,6 +83,7 @@ async def get_status(
         "documents": application.documents,
         "face_match_score": face_score,
         "face_is_match": face_match,
+        "selfie_uploaded": bool(application.face_verifications),
     }
 
 
@@ -78,6 +92,7 @@ async def upload_doc(
     application_id: uuid.UUID,
     doc_type: str,
     file: UploadFile,
+    replace_existing: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -87,7 +102,9 @@ async def upload_doc(
             detail="Invalid document type. Must be: passport, national_id, or drivers_license",
         )
 
-    file_content = await file.read()
+    file_content = await file.read(settings.max_file_size_bytes + 1)
+    if len(file_content) > settings.max_file_size_bytes:
+        raise HTTPException(status_code=413, detail="File exceeds the upload limit")
     if not file_content:
         raise HTTPException(status_code=422, detail="Empty file uploaded")
 
@@ -99,6 +116,7 @@ async def upload_doc(
             doc_type=doc_type,
             file_content=file_content,
             original_filename=file.filename or "unknown",
+            replace_existing=replace_existing,
         )
         return {
             "id": document.id,
@@ -146,19 +164,19 @@ async def get_document(
 async def upload_selfie_endpoint(
     application_id: uuid.UUID,
     file: UploadFile,
+    frames: list[UploadFile] | None = File(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    file_content = await file.read()
-    if not file_content:
-        raise HTTPException(status_code=422, detail="Empty file uploaded")
+    contents = await _read_selfie_files(file, frames)
 
     try:
         verification = await upload_selfie(
             db=db,
             application_id=application_id,
             user_id=current_user.id,
-            file_content=file_content,
+            file_content=contents[0],
+            frame_contents=contents[1:],
             original_filename=file.filename or "selfie",
         )
         return {
@@ -182,6 +200,7 @@ async def get_pipeline_result(
         .where(IDVApplication.user_id == current_user.id)
         .options(selectinload(IDVApplication.pipeline_result))
         .order_by(IDVApplication.created_at.desc())
+        .limit(1)
     )
     application = result.scalar_one_or_none()
 
@@ -214,6 +233,8 @@ async def get_pipeline_result(
         "reason_codes": pr.reason_codes,
         "started_at": pr.started_at,
         "completed_at": pr.completed_at,
+        "stage_results": pr.stage_results,
+        "pipeline_result": serialize_result(pr),
     }
 
 
@@ -226,6 +247,8 @@ async def get_mobile_selfie_token(
     application = await get_user_application(db=db, user_id=current_user.id)
     if not application:
         raise HTTPException(status_code=404, detail="No active IDV application found")
+    if application.status not in (ApplicationStatus.PENDING, ApplicationStatus.ERROR):
+        raise HTTPException(status_code=409, detail="Application is no longer editable")
 
     token = secrets.token_urlsafe(32)
 
@@ -246,30 +269,28 @@ async def get_mobile_selfie_token(
 async def mobile_upload_selfie(
     token: str,
     file: UploadFile,
+    frames: list[UploadFile] | None = File(None),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Accept a selfie upload from a phone using a one-time token (no JWT needed)."""
+    contents = await _read_selfie_files(file, frames)
     r = aioredis.from_url(settings.redis_url)
     try:
-        value = await r.get(f"mobile_selfie:{token}")
+        value = await r.getdel(f"mobile_selfie:{token}")
         if not value:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
-        await r.delete(f"mobile_selfie:{token}")
     finally:
         await r.aclose()
 
     app_id_str, user_id_str = value.decode().split(":")
-
-    file_content = await file.read()
-    if not file_content:
-        raise HTTPException(status_code=422, detail="Empty file uploaded")
 
     try:
         verification = await upload_selfie(
             db=db,
             application_id=uuid.UUID(app_id_str),
             user_id=uuid.UUID(user_id_str),
-            file_content=file_content,
+            file_content=contents[0],
+            frame_contents=contents[1:],
             original_filename=file.filename or "selfie",
         )
         return {
@@ -280,3 +301,20 @@ async def mobile_upload_selfie(
         }
     except IDVServiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from None
+
+
+async def _read_selfie_files(file: UploadFile, frames: list[UploadFile] | None) -> list[bytes]:
+    uploads = [file, *(frames or [])]
+    if len(uploads) > 10 or len(uploads) == 2:
+        raise HTTPException(status_code=422, detail="Submit one photo or 3–10 frames")
+    contents = []
+    remaining = settings.max_file_size_bytes
+    for upload in uploads:
+        content = await upload.read(remaining + 1)
+        if len(content) > remaining:
+            raise HTTPException(status_code=413, detail="Combined selfie payload exceeds the upload limit")
+        if not content:
+            raise HTTPException(status_code=422, detail="Empty selfie frame")
+        contents.append(content)
+        remaining -= len(content)
+    return contents

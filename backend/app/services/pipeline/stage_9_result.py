@@ -7,13 +7,17 @@ and stores per-document metadata (liveness scores, normalized data, etc.).
 from __future__ import annotations
 
 import time
+import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy import select
 
+from app.config import get_settings
+from app.models.audit_log import AuditLog
 from app.models.document import Document
+from app.models.face_verification import FaceVerification
 from app.models.idv_application import ApplicationStatus, IDVApplication
 from app.models.pipeline_result import PipelineResult
 from app.services.pipeline.types import PipelineContext, StageResult
@@ -52,8 +56,9 @@ async def run_stage_9(
 
     # --- Build PipelineResult ---
     pipeline_result = PipelineResult(
+        id=uuid.uuid4(),
         application_id=ctx.application_id,
-        pipeline_version="1.0",
+        pipeline_version="2.0",
         stage_0_result=_get_stage_dict(ctx, 0),
         stage_1_result=_get_stage_dict(ctx, 1),
         stage_2_result=_get_stage_dict(ctx, 2),
@@ -74,12 +79,11 @@ async def run_stage_9(
         completed_at=completed_at,
     )
 
-    # Check for existing result (re-run) and replace
+    # A retry must never overwrite a final decision or a reviewer's work.
     existing = await db.execute(select(PipelineResult).where(PipelineResult.application_id == ctx.application_id))
     old = existing.scalar_one_or_none()
     if old:
-        await db.delete(old)
-        await db.flush()
+        raise RuntimeError("A final pipeline result already exists")
 
     db.add(pipeline_result)
     details["pipeline_result_id"] = str(pipeline_result.id)
@@ -89,7 +93,7 @@ async def run_stage_9(
     application = app_result.scalar_one_or_none()
 
     if application:
-        application.pipeline_version = "1.0"
+        application.pipeline_version = "2.0"
         application.pipeline_decision = ctx.final_decision
 
         new_status = DECISION_STATUS_MAP.get(ctx.final_decision)
@@ -99,7 +103,7 @@ async def run_stage_9(
         # Store weighted total as verification_score for backward compat
         application.verification_score = ctx.weighted_total * 100  # 0-100 scale
         application.score_details = {
-            "pipeline_version": "1.0",
+            "pipeline_version": "2.0",
             "channel_scores": ctx.channel_scores,
             "weighted_total": ctx.weighted_total,
             "decision": ctx.final_decision,
@@ -110,6 +114,32 @@ async def run_stage_9(
 
         details["application_status"] = new_status.value if new_status else None
         details["verification_score"] = application.verification_score
+
+    selfie = (
+        await db.execute(
+            select(FaceVerification)
+            .where(FaceVerification.application_id == ctx.application_id)
+            .order_by(FaceVerification.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if selfie:
+        selfie.similarity_score = ctx.channel_scores.get("A")
+        selfie.is_match = (ctx.channel_scores.get("A") or 0.0) >= get_settings().face_similarity_threshold
+        selfie.verified_at = completed_at
+    db.add(
+        AuditLog(
+            application_id=ctx.application_id,
+            action="pipeline_completed",
+            performed_by=None,
+            details={
+                "decision": ctx.final_decision,
+                "override": ctx.decision_override,
+                "pipeline_version": "2.0",
+                "reason_codes": ctx.reason_codes,
+            },
+        )
+    )
 
     # --- Update document records ---
     for doc_id, label, normalized, liveness_stage_key in [
@@ -155,6 +185,8 @@ async def run_stage_9(
         duration_ms=duration,
     )
     ctx.stage_results.append(result)
+    pipeline_result.stage_results = [stage.to_dict() for stage in ctx.stage_results]
+    await db.flush()
 
     logger.info(
         "Pipeline completed",

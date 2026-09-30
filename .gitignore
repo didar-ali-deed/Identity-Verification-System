@@ -62,3 +62,11 @@ backend/app/models_data/
 # Logs
 *.log
 .claude/
+third_party/
+*.pth
+*.onnx
+celerybeat-schedule*
+frontend/test-results/
+frontend/playwright-report/
+!docs/screenshots/*.png
+!docs/samples/*.png

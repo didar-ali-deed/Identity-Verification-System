@@ -53,6 +53,7 @@ jobs:
       JWT_ALGORITHM: HS256
       UPLOAD_DIR: /tmp/uploads
       PYTHONIOENCODING: utf-8
+      IDV_INTEGRATION_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -60,6 +61,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r backend/requirements.txt
+      - run: cd backend && python -m alembic upgrade head
       - run: cd backend && pytest tests/ -v --tb=short
 
   frontend-lint:
@@ -95,7 +97,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t idv-backend ./backend
+      - run: docker run --rm -v "${{ github.workspace }}/scripts/check_runtime.py:/tmp/check_runtime.py:ro" idv-backend python /tmp/check_runtime.py
       - run: docker build -t idv-frontend ./frontend
+
+  browser-test:
+    name: Browser Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: cd frontend && npm ci
+      - run: cd frontend && npx playwright install --with-deps chromium
+      - run: cd frontend && npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-traces
+          path: frontend/test-results/
 
   security-audit:
     name: Security Audit
@@ -113,4 +135,5 @@ jobs:
       - run: pip install pip-audit
       - run: pip-audit -r backend/requirements.txt
       - run: pip-audit -r backend/requirements-ml.txt
+      - run: pip-audit -r backend/requirements-ocr.txt
       - run: cd frontend && npm audit --audit-level=high

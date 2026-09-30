@@ -1,12 +1,9 @@
+import asyncio
+import shutil
 import uuid
 from pathlib import Path
 
-import structlog
-
 from app.config import get_settings
-
-settings = get_settings()
-logger = structlog.get_logger()
 
 
 class StorageError(Exception):
@@ -15,79 +12,50 @@ class StorageError(Exception):
 
 
 class LocalStorage:
-    """Local filesystem storage for development."""
+    """Private filesystem storage. All paths must remain inside the configured root."""
 
     def __init__(self, base_dir: str | None = None):
-        self.base_dir = Path(base_dir or settings.upload_dir)
+        self.base_dir = Path(base_dir or get_settings().upload_dir).resolve()
 
-    def _ensure_dir(self, subdir: str) -> Path:
-        dir_path = self.base_dir / subdir
-        dir_path.mkdir(parents=True, exist_ok=True)
-        return dir_path
+    def _resolve(self, relative_path: str) -> Path:
+        path = (self.base_dir / relative_path).resolve()
+        if not path.is_relative_to(self.base_dir):
+            raise StorageError("Invalid file path")
+        return path
 
-    async def save_file(
-        self,
-        file_content: bytes,
-        subdir: str,
-        extension: str,
-    ) -> str:
-        """Save file with a UUID name. Returns the relative file path."""
-        dir_path = self._ensure_dir(subdir)
-        filename = f"{uuid.uuid4().hex}{extension}"
-        file_path = dir_path / filename
-        relative_path = f"{subdir}/{filename}"
-
+    async def save_file(self, file_content: bytes, subdir: str, extension: str) -> str:
+        if extension not in (".jpg", ".png"):
+            raise StorageError("Invalid file extension")
+        relative = f"{subdir}/{uuid.uuid4().hex}{extension}"
+        path = self._resolve(relative)
         try:
-            file_path.write_bytes(file_content)
-            await logger.ainfo(
-                "File saved",
-                path=relative_path,
-                size=len(file_content),
-            )
-            return relative_path
-        except OSError as e:
-            await logger.aerror("File save failed", error=str(e))
-            raise StorageError("Failed to save file") from e
+            path.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(path.write_bytes, file_content)
+        except OSError as exc:
+            raise StorageError("Failed to save file") from exc
+        return relative
 
     async def read_file(self, relative_path: str) -> bytes:
-        """Read a file by its relative path."""
-        file_path = self.base_dir / relative_path
-
-        # Prevent path traversal
-        resolved = file_path.resolve()
-        base_resolved = self.base_dir.resolve()
-        if not str(resolved).startswith(str(base_resolved)):
-            raise StorageError("Invalid file path")
-
-        if not file_path.exists():
-            raise StorageError("File not found")
-
         try:
-            return file_path.read_bytes()
-        except OSError as e:
-            await logger.aerror("File read failed", error=str(e))
-            raise StorageError("Failed to read file") from e
+            return await asyncio.to_thread(self._resolve(relative_path).read_bytes)
+        except OSError as exc:
+            raise StorageError("Failed to read file") from exc
 
     async def delete_file(self, relative_path: str) -> None:
-        """Delete a file by its relative path."""
-        file_path = self.base_dir / relative_path
-
-        resolved = file_path.resolve()
-        base_resolved = self.base_dir.resolve()
-        if not str(resolved).startswith(str(base_resolved)):
-            raise StorageError("Invalid file path")
-
         try:
-            if file_path.exists():
-                file_path.unlink()
-                await logger.ainfo("File deleted", path=relative_path)
-        except OSError as e:
-            await logger.aerror("File delete failed", error=str(e))
-            raise StorageError("Failed to delete file") from e
+            await asyncio.to_thread(self._resolve(relative_path).unlink, missing_ok=True)
+        except OSError as exc:
+            raise StorageError("Failed to delete file") from exc
 
     def get_absolute_path(self, relative_path: str) -> str:
-        """Get absolute filesystem path for a relative path."""
-        return str((self.base_dir / relative_path).resolve())
+        return str(self._resolve(relative_path))
+
+    async def delete_application_files(self, application_id: uuid.UUID) -> None:
+        for category in ("documents", "selfies"):
+            # UUID-derived targets are checked by _resolve against the upload root.
+            target = self._resolve(f"{category}/{application_id}")
+            if target.is_dir():
+                await asyncio.to_thread(shutil.rmtree, target)
 
 
 def get_storage() -> LocalStorage:

@@ -1,35 +1,23 @@
 import uuid
 
-import structlog
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
+from app.models.audit_log import AuditLog
 from app.models.document import Document, DocumentType
 from app.models.face_verification import FaceVerification
 from app.models.idv_application import ApplicationStatus, IDVApplication
+from app.models.pipeline_result import PipelineResult
+from app.models.task_outbox import TaskOutbox
+from app.services.task_outbox import enqueue
 from app.utils.storage import get_storage
 from app.utils.validators import ValidationError, validate_uploaded_image
 
-_CELERY_AVAILABLE = True
-try:
-    from app.tasks.verification import (
-        process_document_ocr,
-        process_face_comparison,
-        process_fraud_check,
-        run_god_pipeline,
-    )
-except Exception:
-    _CELERY_AVAILABLE = False
-
 settings = get_settings()
-logger = structlog.get_logger()
-
-MIME_TO_EXTENSION = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-}
+MIME_TO_EXTENSION = {"image/jpeg": ".jpg", "image/png": ".png"}
 
 
 class IDVServiceError(Exception):
@@ -38,62 +26,47 @@ class IDVServiceError(Exception):
         self.status_code = status_code
 
 
-async def create_application(
-    db: AsyncSession,
-    user_id: uuid.UUID,
-) -> IDVApplication:
-    """Create a new IDV application for the user."""
-    result = await db.execute(
-        select(IDVApplication).where(
+async def create_application(db: AsyncSession, user_id: uuid.UUID) -> IDVApplication:
+    existing = await db.execute(
+        select(IDVApplication)
+        .where(
             IDVApplication.user_id == user_id,
             IDVApplication.status.in_(
                 [
                     ApplicationStatus.PENDING,
                     ApplicationStatus.PROCESSING,
                     ApplicationStatus.READY_FOR_REVIEW,
+                    ApplicationStatus.ERROR,
                 ]
             ),
         )
+        .limit(1)
     )
-    existing = result.scalar_one_or_none()
-    if existing:
+    if existing.scalar_one_or_none():
         raise IDVServiceError("You already have an active IDV application", status_code=409)
-
     application = IDVApplication(user_id=user_id, status=ApplicationStatus.PENDING)
     db.add(application)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise IDVServiceError("You already have an active IDV application", status_code=409) from exc
     await db.refresh(application)
-
-    await logger.ainfo(
-        "IDV application created",
-        application_id=str(application.id),
-        user_id=str(user_id),
-    )
     return application
 
 
-async def get_user_application(
-    db: AsyncSession,
-    user_id: uuid.UUID,
-) -> IDVApplication | None:
-    """Get the most recent IDV application for a user, with all related data."""
+async def get_user_application(db: AsyncSession, user_id: uuid.UUID) -> IDVApplication | None:
     result = await db.execute(
         select(IDVApplication)
         .where(IDVApplication.user_id == user_id)
-        .options(
-            selectinload(IDVApplication.documents),
-            selectinload(IDVApplication.face_verifications),
-        )
+        .options(selectinload(IDVApplication.documents), selectinload(IDVApplication.face_verifications))
         .order_by(IDVApplication.created_at.desc())
+        .limit(1)
     )
     return result.scalar_one_or_none()
 
 
-async def get_application_by_id(
-    db: AsyncSession,
-    application_id: uuid.UUID,
-) -> IDVApplication | None:
-    """Get a specific IDV application by ID with all related data."""
+async def get_application_by_id(db: AsyncSession, application_id: uuid.UUID) -> IDVApplication | None:
     result = await db.execute(
         select(IDVApplication)
         .where(IDVApplication.id == application_id)
@@ -106,61 +79,12 @@ async def get_application_by_id(
     return result.scalar_one_or_none()
 
 
-def _extract_document_fields_sync(abs_path: str, doc_type: str) -> dict:
-    """Run synchronous OCR extraction and return structured fields dict.
-
-    Called via asyncio.to_thread so it doesn't block the event loop.
-    Returns empty dict on any error — callers treat it as best-effort.
-    """
+def _validate(content: bytes) -> str:
     try:
-        from app.services.ocr_service import extract_text, get_raw_text
-        from app.services.pipeline.stage_2_extraction import (
-            extract_national_id_front,
-            extract_passport_mrz_td3,
-            extract_passport_viz,
-        )
-
-        ocr_results = extract_text(abs_path)
-        raw_text = get_raw_text(ocr_results)
-
-        if doc_type == "passport":
-            mrz = extract_passport_mrz_td3(raw_text, ocr_results)
-            viz = extract_passport_viz(raw_text, ocr_results)
-            # MRZ is authoritative; VIZ fills gaps
-            if not mrz.full_name and viz.full_name:
-                mrz.full_name = viz.full_name
-            if not mrz.dob and viz.dob:
-                mrz.dob = viz.dob
-            if not mrz.document_number and viz.document_number:
-                mrz.document_number = viz.document_number
-            if not mrz.expiry_date and viz.expiry_date:
-                mrz.expiry_date = viz.expiry_date
-            if viz.place_of_birth:
-                mrz.place_of_birth = viz.place_of_birth
-            if viz.issuing_authority:
-                mrz.issuing_authority = viz.issuing_authority
-            fields = mrz
-        else:
-            fields = extract_national_id_front(raw_text, ocr_results)
-
-        return {
-            "document_type": doc_type,
-            "full_name": fields.full_name,
-            "dob": fields.dob,
-            "document_number": fields.document_number,
-            "expiry_date": fields.expiry_date,
-            "nationality": fields.nationality,
-            "gender": fields.gender,
-            "national_id_number": fields.national_id_number,
-            "father_name": fields.father_name,
-            "place_of_birth": fields.place_of_birth,
-            "issuing_authority": fields.issuing_authority,
-            "confidences": fields.confidences,
-            "raw_text": raw_text[:1000],
-        }
-    except Exception as exc:
-        logger.warning("Sync OCR extraction failed", error=str(exc), doc_type=doc_type)
-        return {}
+        mime, _, _ = validate_uploaded_image(content)
+        return mime
+    except ValidationError as exc:
+        raise IDVServiceError(exc.detail, status_code=422) from exc
 
 
 async def upload_document(
@@ -170,53 +94,51 @@ async def upload_document(
     doc_type: str,
     file_content: bytes,
     original_filename: str,
+    replace_existing: bool = False,
 ) -> Document:
-    """Upload and validate an ID document for a IDV application."""
     await _get_and_validate_application(db, application_id, user_id)
-
-    try:
-        mime_type, width, height = validate_uploaded_image(file_content)
-    except ValidationError as e:
-        raise IDVServiceError(e.detail, status_code=422) from None
-
-    storage = get_storage()
-    extension = MIME_TO_EXTENSION.get(mime_type, ".jpg")
-    relative_path = await storage.save_file(
-        file_content,
-        subdir=f"documents/{application_id}",
-        extension=extension,
+    mime = _validate(file_content)
+    duplicate = await db.execute(
+        select(Document).where(
+            Document.application_id == application_id,
+            Document.doc_type == DocumentType(doc_type),
+        )
     )
-
+    previous = duplicate.scalar_one_or_none()
+    if previous and not replace_existing:
+        raise IDVServiceError("This document type has already been uploaded", status_code=409)
+    storage = get_storage()
+    relative_path = await storage.save_file(file_content, f"documents/{application_id}", MIME_TO_EXTENSION[mime])
+    if previous:
+        # A fresh ID prevents an older OCR task from overwriting the replacement.
+        await db.delete(previous)
     document = Document(
         application_id=application_id,
         doc_type=DocumentType(doc_type),
         file_path=relative_path,
         original_filename=original_filename,
         file_size=len(file_content),
-        mime_type=mime_type,
+        mime_type=mime,
     )
     db.add(document)
     await db.flush()
     await db.refresh(document)
-
-    await logger.ainfo(
-        "Document uploaded",
-        document_id=str(document.id),
-        application_id=str(application_id),
-        doc_type=doc_type,
-        size=len(file_content),
-    )
-
-    abs_path = storage.get_absolute_path(relative_path)
-
-    # Queue OCR + fraud detection as Celery tasks (async — returns immediately)
-    if _CELERY_AVAILABLE:
-        try:
-            process_document_ocr.delay(str(document.id), abs_path, doc_type)
-            process_fraud_check.delay(str(document.id), abs_path)
-        except Exception as e:
-            await logger.awarning("Failed to dispatch tasks", error=str(e))
-
+    if previous:
+        db.add(
+            AuditLog(
+                application_id=application_id,
+                performed_by=user_id,
+                action="document_replaced",
+                details={
+                    "doc_type": doc_type,
+                    "previous_document_id": str(previous.id),
+                    "document_id": str(document.id),
+                },
+            )
+        )
+    absolute = storage.get_absolute_path(relative_path)
+    enqueue(db, "app.tasks.verification.process_document_ocr", str(document.id), absolute, doc_type)
+    enqueue(db, "app.tasks.verification.process_fraud_check", str(document.id), absolute)
     return document
 
 
@@ -226,94 +148,79 @@ async def upload_selfie(
     user_id: uuid.UUID,
     file_content: bytes,
     original_filename: str,
+    frame_contents: list[bytes] | None = None,
 ) -> FaceVerification:
-    """Upload a selfie for face matching."""
-    await _get_and_validate_application(db, application_id, user_id)
-
-    try:
-        mime_type, width, height = validate_uploaded_image(file_content)
-    except ValidationError as e:
-        raise IDVServiceError(e.detail, status_code=422) from None
-
+    application = await _get_and_validate_application(db, application_id, user_id)
+    documents = (await db.execute(select(Document).where(Document.application_id == application_id))).scalars().all()
+    if not any(doc.doc_type in (DocumentType.PASSPORT, DocumentType.NATIONAL_ID) for doc in documents):
+        raise IDVServiceError("Upload an identity document before your selfie", status_code=409)
+    contents = [file_content, *(frame_contents or [])]
+    if len(contents) > 10 or (len(contents) > 1 and len(contents) < 3):
+        raise IDVServiceError("Submit one photo for review or 3–10 camera frames", status_code=422)
+    if sum(map(len, contents)) > settings.max_file_size_bytes:
+        raise IDVServiceError("Combined selfie payload exceeds the upload limit", status_code=413)
+    mimes = [_validate(content) for content in contents]
     storage = get_storage()
-    extension = MIME_TO_EXTENSION.get(mime_type, ".jpg")
-    relative_path = await storage.save_file(
-        file_content,
-        subdir=f"selfies/{application_id}",
-        extension=extension,
-    )
-
-    face_verification = FaceVerification(
-        application_id=application_id,
-        selfie_path=relative_path,
-    )
-    db.add(face_verification)
+    paths = []
+    for content, mime in zip(contents, mimes, strict=True):
+        paths.append(await storage.save_file(content, f"selfies/{application_id}", MIME_TO_EXTENSION[mime]))
+    verification = FaceVerification(application_id=application_id, selfie_path=paths[0], frame_paths=paths)
+    db.add(verification)
+    application.status = ApplicationStatus.PROCESSING
     await db.flush()
-    await db.refresh(face_verification)
+    await db.refresh(verification)
+    enqueue(db, "app.tasks.verification.run_god_pipeline", str(application_id))
+    return verification
 
-    await logger.ainfo(
-        "Selfie uploaded",
-        verification_id=str(face_verification.id),
-        application_id=str(application_id),
+
+async def reset_verification(db: AsyncSession, application_id: uuid.UUID, user_id: uuid.UUID) -> IDVApplication:
+    try:
+        application = await db.scalar(
+            select(IDVApplication).where(IDVApplication.id == application_id).with_for_update(nowait=True)
+        )
+    except DBAPIError as exc:
+        await db.rollback()
+        if getattr(exc.orig, "sqlstate", None) != "55P03":
+            raise
+        raise IDVServiceError("Verification is busy. Wait for processing to finish before resetting.", 409) from exc
+    if not application:
+        raise IDVServiceError("Application not found", 404)
+    if application.user_id != user_id:
+        raise IDVServiceError("Not authorized to reset this application", 403)
+    if application.status == ApplicationStatus.PROCESSING:
+        raise IDVServiceError("Wait for processing to finish before resetting.", 409)
+    documents = (await db.execute(select(Document).where(Document.application_id == application_id))).scalars().all()
+    selfies = (
+        (await db.execute(select(FaceVerification).where(FaceVerification.application_id == application_id)))
+        .scalars()
+        .all()
     )
-
-    # Dispatch verification pipeline(s) based on pipeline_mode
-    if _CELERY_AVAILABLE:
-        mode = settings.pipeline_mode
-
-        # Legacy pipeline: face comparison task
-        if mode in ("legacy", "both"):
-            selfie_abs_path = storage.get_absolute_path(relative_path)
-            doc_result = await db.execute(
-                select(Document).where(Document.application_id == application_id).order_by(Document.uploaded_at.desc())
-            )
-            latest_doc = doc_result.scalar_one_or_none()
-            if latest_doc:
-                doc_abs_path = storage.get_absolute_path(latest_doc.file_path)
-                try:
-                    process_face_comparison.delay(str(application_id), selfie_abs_path, doc_abs_path)
-                    await logger.ainfo(
-                        "Legacy face comparison task dispatched",
-                        application_id=str(application_id),
-                    )
-                except Exception as e:
-                    await logger.awarning("Failed to dispatch face comparison", error=str(e))
-
-        # God pipeline: full 10-stage verification
-        if mode in ("god", "both"):
-            try:
-                run_god_pipeline.delay(str(application_id))
-                await logger.ainfo(
-                    "God pipeline task dispatched",
-                    application_id=str(application_id),
-                )
-            except Exception as e:
-                await logger.awarning("Failed to dispatch god pipeline", error=str(e))
-
-        # Update application status to processing
-        app_result = await db.execute(select(IDVApplication).where(IDVApplication.id == application_id))
-        application = app_result.scalar_one_or_none()
-        if application and application.status == ApplicationStatus.PENDING:
-            application.status = ApplicationStatus.PROCESSING
-            await db.flush()
-
-    return face_verification
+    paths = {path for doc in documents for path in (doc.file_path, doc.face_image_path) if path}
+    for selfie in selfies:
+        paths.update(selfie.frame_paths or [selfie.selfie_path])
+        paths.add(selfie.selfie_path)
+        if selfie.document_face_path:
+            paths.add(selfie.document_face_path)
+    old_ids = [str(application_id), *(str(doc.id) for doc in documents)]
+    await db.execute(delete(TaskOutbox).where(TaskOutbox.args[0].astext.in_(old_ids)))
+    await db.execute(delete(PipelineResult).where(PipelineResult.application_id == application_id))
+    await db.execute(delete(IDVApplication).where(IDVApplication.id == application_id))
+    fresh = await create_application(db, user_id)
+    await db.commit()
+    storage = get_storage()
+    for path in paths:
+        await storage.delete_file(path)
+    await storage.delete_application_files(application_id)
+    return fresh
 
 
-async def _get_and_validate_application(
-    db: AsyncSession,
-    application_id: uuid.UUID,
-    user_id: uuid.UUID,
-) -> IDVApplication:
-    """Fetch and validate that the application belongs to the user and is editable."""
-    result = await db.execute(select(IDVApplication).where(IDVApplication.id == application_id))
+async def _get_and_validate_application(db: AsyncSession, application_id: uuid.UUID, user_id: uuid.UUID):
+    result = await db.execute(select(IDVApplication).where(IDVApplication.id == application_id).with_for_update())
     application = result.scalar_one_or_none()
-
     if not application:
         raise IDVServiceError("Application not found", status_code=404)
     if application.user_id != user_id:
         raise IDVServiceError("Not authorized to modify this application", status_code=403)
     if application.status not in (ApplicationStatus.PENDING, ApplicationStatus.ERROR):
         raise IDVServiceError("Application cannot be modified in its current state", status_code=409)
-
     return application

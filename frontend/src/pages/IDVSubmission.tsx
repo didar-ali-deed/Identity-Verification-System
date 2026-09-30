@@ -5,6 +5,7 @@ import DocumentUpload from "@/components/DocumentUpload";
 import SelfieCapture from "@/components/SelfieCapture";
 import ExtractedFieldsCard from "@/components/ExtractedFieldsCard";
 import DocumentCompare from "@/components/DocumentCompare";
+import ResetVerificationButton from "@/components/ResetVerificationButton";
 import {
   useCreateApplication,
   useUploadDocument,
@@ -137,6 +138,15 @@ export default function IDVSubmission() {
 
     if (existingApp && ["pending", "error"].includes(existingApp.status)) {
       setApplicationId(existingApp.id);
+      const documents = existingApp.documents;
+      setPassportDocId(documents.find((doc) => doc.doc_type === "passport")?.id ?? null);
+      setIdDocId(documents.find((doc) => doc.doc_type === "national_id")?.id ?? null);
+      setLicenseDocId(documents.find((doc) => doc.doc_type === "drivers_license")?.id ?? null);
+      if (documents.some((doc) => doc.doc_type === "passport") && documents.some((doc) => doc.doc_type === "national_id")) {
+        setStep(STEP_COMPARE);
+      } else if (documents.some((doc) => doc.doc_type === "passport")) {
+        setStep(STEP_NATIONAL_ID);
+      }
       setAppCreated(true);
       return;
     }
@@ -168,12 +178,15 @@ export default function IDVSubmission() {
     try {
       const result = await uploadDocument.mutateAsync({ file, docType, applicationId });
       if (docType === "passport") {
+        setPassportFields(null);
         setPassportDocId(result.id);
-        setStep(STEP_NATIONAL_ID);
+        setStep(idDocId ? STEP_COMPARE : STEP_NATIONAL_ID);
       } else if (docType === "national_id") {
+        setIdFields(null);
         setIdDocId(result.id);
-        setStep(STEP_DRIVING);
+        setStep(idDocId ? STEP_COMPARE : STEP_DRIVING);
       } else {
+        setLicenseFields(null);
         setLicenseDocId(result.id);
         setStep(STEP_COMPARE);
       }
@@ -183,7 +196,7 @@ export default function IDVSubmission() {
     }
   };
 
-  const handleSelfie = async (file: File) => {
+  const handleSelfie = async (file: File, frames: File[] = []) => {
     if (!applicationId) return;
     setError(null);
     // Phone-mode placeholder: selfie was already uploaded from the phone
@@ -192,7 +205,7 @@ export default function IDVSubmission() {
       return;
     }
     try {
-      await uploadSelfie.mutateAsync({ file, applicationId });
+      await uploadSelfie.mutateAsync({ file, frames, applicationId });
       setStep(STEP_DONE);
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
@@ -224,6 +237,12 @@ export default function IDVSubmission() {
       </div>
 
       <StepBar current={step} />
+      {applicationId && <div className="mb-5"><ResetVerificationButton applicationId={applicationId} /></div>}
+      <div className="mb-5 text-sm text-muted-foreground">
+        OCR test samples: <a className="text-primary" href="/samples/synthetic-passport.png" download>Download specimen passport</a>
+        {" · "}<a className="text-primary" href="/samples/synthetic-cnic.png" download>Download specimen CNIC</a>
+        <p className="text-xs mt-1">Fictional Alex Sample documents for extraction testing. They are not valid identity or liveness evidence.</p>
+      </div>
 
       {error && (
         <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-sm text-red-400">
@@ -330,6 +349,10 @@ export default function IDVSubmission() {
                   drivingLicense={licenseFields}
                   userFullName={user?.full_name}
                 />
+                <div className="flex gap-3">
+                  <button onClick={() => setStep(STEP_PASSPORT)} className="text-sm text-primary cursor-pointer">Replace passport</button>
+                  <button onClick={() => setStep(STEP_NATIONAL_ID)} className="text-sm text-primary cursor-pointer">Replace national ID</button>
+                </div>
                 <button
                   onClick={() => setStep(STEP_SELFIE)}
                   className="w-full py-2.5 bg-primary text-white rounded-xl text-sm font-semibold hover:bg-primary/90 cursor-pointer border-none btn-glow transition-all"

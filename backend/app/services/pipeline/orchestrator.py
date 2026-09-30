@@ -50,13 +50,27 @@ async def run_pipeline(application_id: str, db: AsyncSession) -> PipelineContext
         .options(
             selectinload(IDVApplication.documents),
             selectinload(IDVApplication.face_verifications),
+            selectinload(IDVApplication.pipeline_result),
         )
         .where(IDVApplication.id == application_id)
+        .with_for_update(of=IDVApplication)
     )
     application = result.scalar_one_or_none()
 
     if not application:
         raise ValueError(f"Application {application_id} not found")
+
+    if application.pipeline_result:
+        saved = application.pipeline_result
+        return PipelineContext(
+            application_id=application_id,
+            final_decision=saved.final_decision,
+            weighted_total=saved.weighted_total or 0.0,
+            decision_override=saved.decision_override,
+            channel_scores={key: getattr(saved, f"channel_{key.lower()}_score") or 0.0 for key in "ABCDE"},
+            flags=saved.flags or [],
+            reason_codes=saved.reason_codes or [],
+        )
 
     # Mark as processing
     application.status = ApplicationStatus.PROCESSING
@@ -67,6 +81,14 @@ async def run_pipeline(application_id: str, db: AsyncSession) -> PipelineContext
 
     # --- Run pipeline stages ---
     try:
+        # Acceptance gates must see OCR from these documents, regardless of task ordering.
+        from app.services.ocr_service import extract_text, get_raw_text
+
+        for label, path in (("passport", ctx.passport_image_path), ("id", ctx.id_image_path)):
+            if path:
+                rows = extract_text(path)
+                setattr(ctx, f"{label}_ocr_results", rows)
+                setattr(ctx, f"{label}_raw_text", get_raw_text(rows))
         # Stage 0: Document Acceptance
         stage_0 = await run_stage_0(ctx, db)
         if stage_0.hard_fail:
@@ -118,8 +140,11 @@ async def run_pipeline(application_id: str, db: AsyncSession) -> PipelineContext
         # Mark application as errored — must re-merge after rollback since the
         # session has expelled the instance.
         try:
-            application.status = ApplicationStatus.ERROR
-            db.add(application)
+            from sqlalchemy import update
+
+            await db.execute(
+                update(IDVApplication).where(IDVApplication.id == application_id).values(status=ApplicationStatus.ERROR)
+            )
             await db.commit()
         except Exception:
             logger.exception("Failed to mark application as ERROR", application_id=application_id)
@@ -150,7 +175,7 @@ def _build_context(application: IDVApplication) -> PipelineContext:
     ctx = PipelineContext(application_id=str(application.id))
     storage = LocalStorage()
 
-    for doc in application.documents:
+    for doc in sorted(application.documents, key=lambda document: document.uploaded_at):
         doc_type = doc.doc_type.lower() if doc.doc_type else ""
         abs_path = storage.get_absolute_path(doc.file_path)
 
@@ -178,5 +203,8 @@ def _build_context(application: IDVApplication) -> PipelineContext:
             reverse=True,
         )[0]
         ctx.selfie_image_path = storage.get_absolute_path(latest_selfie.selfie_path)
+        ctx.selfie_frame_paths = [
+            storage.get_absolute_path(path) for path in (latest_selfie.frame_paths or [latest_selfie.selfie_path])
+        ]
 
     return ctx

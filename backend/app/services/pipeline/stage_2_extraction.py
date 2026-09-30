@@ -6,17 +6,21 @@ extracted separately as independent data sources.
 
 from __future__ import annotations
 
-import re
 import time
 
 import structlog
 
 from app.config import get_settings
 from app.services.ocr_service import (
+    _clean_name,
+    _extract_mrz_lines,
+    _label_value,
     compute_field_confidence,
     extract_td1_mrz_lines,
     extract_text,
     get_raw_text,
+    parse_national_id,
+    parse_passport,
     parse_td1_mrz,
     validate_icao_check_digit,
 )
@@ -29,22 +33,8 @@ logger = structlog.get_logger()
 def extract_passport_mrz_td3(raw_text: str, ocr_results: list[dict]) -> ExtractedFields:
     """Parse TD3 passport MRZ (2 lines x 44 chars) with ICAO check digit validation."""
     fields = ExtractedFields(source="passport_mrz")
-    clean = raw_text.replace(" ", "").upper()
-
-    # Find MRZ lines
-    mrz_lines = []
-    for segment in re.split(r"[\n\r]+", clean):
-        cleaned = re.sub(r"[^A-Z0-9<]", "", segment)
-        if len(cleaned) >= 40 and "<" in cleaned:
-            mrz_lines.append(cleaned)
-
-    if len(mrz_lines) < 2:
-        # Try pattern matching
-        matches = re.findall(r"[A-Z0-9<]{40,48}", clean)
-        if len(matches) >= 2:
-            mrz_lines = matches[:2]
-
-    if len(mrz_lines) < 2:
+    mrz_lines = _extract_mrz_lines(raw_text)
+    if not mrz_lines:
         return fields
 
     line1 = mrz_lines[0].ljust(44, "<")[:44]
@@ -98,154 +88,50 @@ def extract_passport_mrz_td3(raw_text: str, ocr_results: list[dict]) -> Extracte
     fields.confidences["composite_mrz_valid"] = 1.0 if composite_valid else 0.0
 
     # Compute OCR confidence per field
-    fields.confidences["full_name"] = compute_field_confidence(fields.full_name, ocr_results)
+    fields.confidences["full_name"] = compute_field_confidence(line1[5:].rstrip("<"), ocr_results)
     fields.confidences["document_number"] = compute_field_confidence(fields.document_number, ocr_results)
     fields.confidences["nationality"] = compute_field_confidence(fields.nationality, ocr_results)
+    fields.confidences["dob"] = compute_field_confidence(dob_raw, ocr_results)
+    if fields.national_id_number:
+        fields.confidences["national_id_number"] = compute_field_confidence(personal, ocr_results)
 
+    return fields
+
+
+def _shared_visual_fields(raw_text: str, ocr_results: list[dict], source: str) -> ExtractedFields:
+    rows = ocr_results or [{"text": line, "confidence": 0.0} for line in raw_text.splitlines()]
+    parsed = (
+        parse_passport(raw_text, rows, use_mrz=False) if source == "passport_viz" else parse_national_id(raw_text, rows)
+    )
+    fields = ExtractedFields(source=source)
+    for name in (
+        "full_name",
+        "father_name",
+        "dob",
+        "expiry_date",
+        "document_number",
+        "national_id_number",
+        "nationality",
+        "gender",
+        "place_of_birth",
+        "issuing_authority",
+    ):
+        setattr(fields, name, parsed.get(name))
+        if parsed.get(name):
+            fields.confidences[name] = compute_field_confidence(parsed[name], rows)
+    father = _clean_name(_label_value(rows, r"^(?:father(?:'s)?\s*(?:/\s*husband)?\s*(?:name)?|s/o)$"))
+    if father:
+        fields.father_name = father
+        fields.confidences["father_name"] = compute_field_confidence(father, rows)
     return fields
 
 
 def extract_passport_viz(raw_text: str, ocr_results: list[dict]) -> ExtractedFields:
-    """Extract VIZ-only fields from passport: place_of_birth, issuing_authority, etc."""
-    fields = ExtractedFields(source="passport_viz")
-
-    # Place of birth
-    pob_match = re.search(
-        r"(?:place\s*of\s*birth|lieu\s*de\s*naissance)[:\s]*([A-Za-z\s\-',]+)",
-        raw_text,
-        re.IGNORECASE,
-    )
-    if pob_match:
-        fields.place_of_birth = pob_match.group(1).strip()
-        fields.confidences["place_of_birth"] = compute_field_confidence(fields.place_of_birth, ocr_results)
-
-    # Date of issue
-    issue_match = re.search(
-        r"(?:date\s*of\s*issue|date\s*d.?emission)[:\s]*(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})",
-        raw_text,
-        re.IGNORECASE,
-    )
-    if issue_match:
-        fields.date_of_issue = issue_match.group(1).strip()
-        fields.confidences["date_of_issue"] = compute_field_confidence(fields.date_of_issue, ocr_results)
-
-    # Issuing authority
-    auth_match = re.search(
-        r"(?:authority|autorit)[:\s]*([A-Za-z\s\-]+)",
-        raw_text,
-        re.IGNORECASE,
-    )
-    if auth_match:
-        fields.issuing_authority = auth_match.group(1).strip()
-        fields.confidences["issuing_authority"] = compute_field_confidence(fields.issuing_authority, ocr_results)
-
-    # VIZ name (for cross-zone comparison)
-    name_match = re.search(
-        r"(?:name|nom|full\s*name|surname)[:\s]+([A-Za-z\s\-']+)",
-        raw_text,
-        re.IGNORECASE,
-    )
-    if name_match:
-        fields.full_name = name_match.group(1).strip()
-        fields.confidences["full_name"] = compute_field_confidence(fields.full_name, ocr_results)
-
-    # VIZ document number
-    doc_match = re.search(
-        r"(?:passport|document)\s*(?:no|number|#)?[:\s]*([A-Z0-9]{6,12})",
-        raw_text,
-        re.IGNORECASE,
-    )
-    if doc_match:
-        fields.document_number = doc_match.group(1).strip()
-
-    # VIZ dates
-    for pattern, field_name in [
-        (r"(?:birth|dob|born)[:\s]*(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})", "dob"),
-        (r"(?:expir|valid)[:\s]*(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})", "expiry_date"),
-    ]:
-        match = re.search(pattern, raw_text, re.IGNORECASE)
-        if match:
-            setattr(fields, field_name, match.group(1).strip())
-
-    return fields
+    return _shared_visual_fields(raw_text, ocr_results, "passport_viz")
 
 
 def extract_national_id_front(raw_text: str, ocr_results: list[dict]) -> ExtractedFields:
-    """Extract fields from national ID card front side."""
-    fields = ExtractedFields(source="id_front")
-
-    # Full name
-    name_patterns = [
-        r"(?:name|nom|full\s*name)[:\s]+([A-Za-z\s\-']+)",
-        r"(?:surname|last\s*name)[:\s]+([A-Za-z\s\-']+)",
-    ]
-    for pattern in name_patterns:
-        match = re.search(pattern, raw_text, re.IGNORECASE)
-        if match:
-            fields.full_name = match.group(1).strip()
-            fields.confidences["full_name"] = compute_field_confidence(fields.full_name, ocr_results)
-            break
-
-    # Father's name
-    father_patterns = [
-        r"(?:father|pere|father.?s?\s*name)[:\s]+([A-Za-z\s\-']+)",
-        r"(?:son\s*of|bin|ibn)[:\s]+([A-Za-z\s\-']+)",
-    ]
-    for pattern in father_patterns:
-        match = re.search(pattern, raw_text, re.IGNORECASE)
-        if match:
-            fields.father_name = match.group(1).strip()
-            fields.confidences["father_name"] = compute_field_confidence(fields.father_name, ocr_results)
-            break
-
-    # National ID number
-    id_patterns = [
-        r"\b(\d{3}-\d{4}-\d{7}-\d)\b",  # UAE format
-        r"\b(784\d{12})\b",  # UAE compact
-        r"\b(\d{9,15})\b",  # Generic
-    ]
-    for pattern in id_patterns:
-        match = re.search(pattern, raw_text)
-        if match:
-            fields.national_id_number = match.group(1)
-            fields.confidences["national_id_number"] = compute_field_confidence(fields.national_id_number, ocr_results)
-            break
-
-    # DOB
-    dob_match = re.search(
-        r"(?:birth|dob|born|b\.date)[:\s]*(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})",
-        raw_text,
-        re.IGNORECASE,
-    )
-    if dob_match:
-        fields.dob = dob_match.group(1).strip()
-        fields.confidences["dob"] = compute_field_confidence(fields.dob, ocr_results)
-
-    # Nationality
-    nat_match = re.search(
-        r"(?:nationality|citizen|nationalite)[:\s]+([A-Za-z\s]+)",
-        raw_text,
-        re.IGNORECASE,
-    )
-    if nat_match:
-        fields.nationality = nat_match.group(1).strip()
-
-    # Gender
-    gender_match = re.search(r"\b(male|female|M|F)\b", raw_text, re.IGNORECASE)
-    if gender_match:
-        val = gender_match.group(1).upper()
-        fields.gender = {"M": "Male", "F": "Female", "MALE": "Male", "FEMALE": "Female"}.get(val)
-
-    # Expiry
-    exp_match = re.search(
-        r"(?:expir|valid)[:\s]*(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})",
-        raw_text,
-        re.IGNORECASE,
-    )
-    if exp_match:
-        fields.expiry_date = exp_match.group(1).strip()
-
-    return fields
+    return _shared_visual_fields(raw_text, ocr_results, "id_front")
 
 
 def extract_national_id_back_mrz(raw_text: str, ocr_results: list[dict]) -> ExtractedFields:
@@ -302,7 +188,7 @@ async def run_stage_2(ctx: PipelineContext) -> StageResult:
 
     # Process passport
     if ctx.passport_image_path:
-        ocr_results = extract_text(ctx.passport_image_path)
+        ocr_results = ctx.passport_ocr_results or extract_text(ctx.passport_image_path)
         raw_text = get_raw_text(ocr_results)
         ctx.passport_ocr_results = ocr_results
         ctx.passport_raw_text = raw_text
@@ -316,7 +202,7 @@ async def run_stage_2(ctx: PipelineContext) -> StageResult:
         # Extract face from passport
         face_path = extract_face_from_document(
             ctx.passport_image_path,
-            f"./uploads/pipeline/{ctx.application_id}",
+            f"{settings.upload_dir}/pipeline/{ctx.application_id}",
             "passport",
         )
         if face_path:
@@ -328,7 +214,7 @@ async def run_stage_2(ctx: PipelineContext) -> StageResult:
 
     # Process national ID
     if ctx.id_image_path:
-        ocr_results = extract_text(ctx.id_image_path)
+        ocr_results = ctx.id_ocr_results or extract_text(ctx.id_image_path)
         raw_text = get_raw_text(ocr_results)
         ctx.id_ocr_results = ocr_results
         ctx.id_raw_text = raw_text
@@ -344,7 +230,7 @@ async def run_stage_2(ctx: PipelineContext) -> StageResult:
         # Extract face from ID
         face_path = extract_face_from_document(
             ctx.id_image_path,
-            f"./uploads/pipeline/{ctx.application_id}",
+            f"{settings.upload_dir}/pipeline/{ctx.application_id}",
             "national_id",
         )
         if face_path:
@@ -364,11 +250,11 @@ async def run_stage_2(ctx: PipelineContext) -> StageResult:
         if not fields_obj:
             continue
 
-        for field_name in ["national_id_number", "document_number"]:
+        for field_name in ["national_id_number", "document_number", "full_name", "dob"]:
             val = getattr(fields_obj, field_name, None)
             if val:
                 conf = fields_obj.confidences.get(field_name, 0.0)
-                if conf < settings.ocr_confidence_threshold and conf > 0.0:
+                if conf < settings.ocr_confidence_threshold:
                     anchor_fields_low.append(f"{label}.{field_name} conf={conf:.2f}")
 
     if anchor_fields_low:
@@ -400,6 +286,14 @@ async def run_stage_2(ctx: PipelineContext) -> StageResult:
                 all_confidences[f"{label}.{k}"] = v
 
     details["field_confidences"] = all_confidences
+
+    if ctx.passport_image_path:
+        mrz = ctx.passport_mrz_fields
+        if not mrz or not all(
+            mrz.confidences.get(key) == 1.0
+            for key in ("document_number_mrz_valid", "dob_mrz_valid", "expiry_mrz_valid", "composite_mrz_valid")
+        ):
+            flags.append({"flag_type": "mrz_invalid", "detail": "Passport MRZ check digits are missing or invalid"})
 
     duration = (time.time() - start) * 1000
     result = StageResult(

@@ -4,7 +4,7 @@
 # Install torch separately for your platform; Docker defaults to the CPU wheel.
 torch>=2.2.0
 torchvision>=0.17.0
-transformers>=4.40.0
+transformers>=4.40.0,<5
 timm>=0.9.0
 sentencepiece>=0.1.99
 

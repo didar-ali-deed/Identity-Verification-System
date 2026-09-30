@@ -33,6 +33,7 @@ async def register_user(
     full_name: str,
 ) -> User:
     """Register a new user with hashed password."""
+    email = email.lower().strip()
     result = await db.execute(select(User).where(User.email == email))
     if result.scalar_one_or_none():
         raise AuthServiceError("Email already registered", status_code=409)
@@ -89,7 +90,11 @@ async def refresh_tokens(
     if not user_id:
         raise AuthServiceError("Invalid refresh token", status_code=401)
 
-    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    try:
+        parsed_id = uuid.UUID(user_id)
+    except ValueError as exc:
+        raise AuthServiceError("Invalid refresh token", status_code=401) from exc
+    result = await db.execute(select(User).where(User.id == parsed_id).with_for_update())
     user = result.scalar_one_or_none()
 
     if not user or not user.is_active:

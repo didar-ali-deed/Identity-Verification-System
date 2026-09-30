@@ -47,8 +47,7 @@ export default function ApplicationDetail({
 
   const doc = application.documents[0];
   const canReview =
-    application.status === "ready_for_review" ||
-    application.status === "pending";
+    application.status === "ready_for_review";
 
   return (
     <div>

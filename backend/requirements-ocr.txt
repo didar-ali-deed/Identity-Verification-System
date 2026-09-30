@@ -1,0 +1,2 @@
+# Document text detection and recognition; verified on the CPU runtime.
+easyocr==1.7.2

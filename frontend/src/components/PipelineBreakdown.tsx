@@ -37,7 +37,7 @@ interface PipelineBreakdownProps {
 }
 
 export default function PipelineBreakdown({ result }: PipelineBreakdownProps) {
-  const stages: (PipelineStageResult | null)[] = [
+  const legacyStages: (PipelineStageResult | null)[] = [
     result.stage_0_result,
     result.stage_1_result,
     result.stage_2_result,
@@ -49,6 +49,11 @@ export default function PipelineBreakdown({ result }: PipelineBreakdownProps) {
     null,
     null,
   ];
+  const stages = result.stage_results
+    ? STAGE_META.map((_, index) => result.stage_results?.find(stage => stage.stage === index) ?? null)
+    : legacyStages;
+  const liveness = stages[1]?.details.selfie_liveness as { verified?: boolean; is_live?: boolean } | undefined;
+  const biometric = stages[5]?.details.channel_a_biometric as { verified?: boolean } | undefined;
 
   return (
     <div className="space-y-5">
@@ -66,6 +71,18 @@ export default function PipelineBreakdown({ result }: PipelineBreakdownProps) {
         <DecisionBadge decision={result.final_decision} />
       </div>
 
+      <div className="grid gap-3 sm:grid-cols-3">
+        {[
+          ["Passive liveness", liveness?.verified ? "Verified across frames" : liveness?.is_live ? "Human review required" : "Missing or failed"],
+          ["Biometric match", biometric?.verified ? "All document faces matched" : "Missing or failed"],
+          ["Decision evidence", result.stage_results ? `${result.stage_results.length} stages available` : "Legacy result"],
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-xl border border-border bg-card p-4">
+            <p className="text-xs text-muted-foreground">{label}</p>
+            <p className="mt-1 text-sm font-semibold">{value}</p>
+          </div>
+        ))}
+      </div>
       {/* 10-Stage Stepper */}
       <div className="bg-card border border-border rounded-xl p-5">
         <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">
@@ -78,8 +95,8 @@ export default function PipelineBreakdown({ result }: PipelineBreakdownProps) {
               stageNum={i}
               meta={meta}
               stageResult={stages[i]}
-              channelScores={i === 5 ? result.channel_scores : undefined}
-              weightedTotal={i === 6 ? result.weighted_total : undefined}
+              channelScores={i === 5 && (!result.stage_results || stages[i]) ? result.channel_scores : undefined}
+              weightedTotal={i === 6 && (!result.stage_results || stages[i]) ? result.weighted_total : undefined}
               finalDecision={i === 8 ? result.final_decision : undefined}
               decisionOverride={i === 7 ? result.decision_override : undefined}
             />
@@ -96,6 +113,8 @@ export default function PipelineBreakdown({ result }: PipelineBreakdownProps) {
           <ChannelScoresChart
             scores={result.channel_scores}
             weightedTotal={result.weighted_total}
+            passThreshold={stages[8]?.details.pass_threshold as number | undefined}
+            reviewThreshold={stages[8]?.details.review_threshold as number | undefined}
           />
         </div>
       )}
@@ -289,6 +308,8 @@ function StageStep({
     >
       <button
         onClick={() => hasDetails && setExpanded(!expanded)}
+        aria-expanded={Boolean(expanded && hasDetails)}
+        disabled={!hasDetails}
         className={`w-full flex items-center gap-3 px-3 py-2.5 text-left bg-transparent border-none ${
           hasDetails ? "cursor-pointer hover:bg-muted/20" : "cursor-default"
         } transition-colors`}
@@ -387,6 +408,7 @@ function CollapsibleSection({
     <div>
       <button
         onClick={() => setOpen(!open)}
+        aria-expanded={open}
         className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 bg-transparent border-none cursor-pointer p-0 hover:text-foreground transition-colors"
       >
         {open ? (

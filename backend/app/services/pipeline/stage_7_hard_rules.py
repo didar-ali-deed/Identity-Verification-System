@@ -29,6 +29,27 @@ HARD_RULES: list[tuple[str, list[str], str]] = [
     ("structural_id_invalid", ["structural_id_invalid"], "manual_review"),
     ("duplicate_active", ["duplicate_active"], "manual_review"),
     ("velocity_exceeded", ["velocity_exceeded"], "manual_review"),
+    ("biometric_unverified", ["biometric_unverified"], "hard_reject"),
+    ("dob_mismatch", ["dob_mismatch"], "hard_reject"),
+    ("name_mismatch", ["name_mismatch", "dob_transposition"], "manual_review"),
+    ("evidence_missing", ["evidence_missing"], "hard_reject"),
+    ("liveness_unverified", ["liveness_unverified"], "manual_review"),
+    ("identity_evidence_missing", ["identity_evidence_missing"], "manual_review"),
+    ("document_check_unavailable", ["document_check_unavailable"], "manual_review"),
+    (
+        "acceptance_review",
+        [
+            "country_not_approved",
+            "edd_required",
+            "unrecognized_doc_type",
+            "structural_implausible",
+            "expiry_unverified",
+            "mrz_invalid",
+        ],
+        "manual_review",
+    ),
+    ("class_not_eligible", ["class_not_eligible"], "hard_reject"),
+    ("tampering_detected", ["tampering_detected"], "manual_review"),
 ]
 
 # Priority: hard_reject > manual_review > None
@@ -73,6 +94,19 @@ def evaluate_hard_rules(ctx: PipelineContext) -> dict:
 async def run_stage_7(ctx: PipelineContext) -> StageResult:
     """Run Stage 7: Hard-Rule Override Layer."""
     start = time.time()
+
+    stages = {stage.stage: stage for stage in ctx.stage_results}
+    early_failure = any(stage.hard_fail for stage in stages.values())
+    if early_failure:
+        ctx.add_flag("evidence_missing", 7, "An earlier stage failed a mandatory verification gate")
+    elif any(stage not in stages for stage in range(7)):
+        ctx.add_flag("evidence_missing", 7, "Mandatory pipeline stages have not completed")
+    elif not stages[1].details.get("selfie_liveness", {}).get("is_live"):
+        ctx.add_flag("selfie_liveness_fail", 7, "Server-produced selfie liveness evidence is missing or failed")
+    elif not stages[1].details["selfie_liveness"].get("verified"):
+        ctx.add_flag("liveness_unverified", 7, "Passive liveness was not verified by a learned model")
+    if not early_failure and 5 in stages and not stages[5].details.get("channel_a_biometric", {}).get("verified"):
+        ctx.add_flag("biometric_unverified", 7, "Server-produced face evidence is missing or failed")
 
     rules_result = evaluate_hard_rules(ctx)
     ctx.decision_override = rules_result["override"]

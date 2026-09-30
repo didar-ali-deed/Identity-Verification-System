@@ -26,6 +26,7 @@ class IDVStatusResponse(BaseModel):
     documents: list[DocumentResponse] = []
     face_match_score: float | None = None
     face_is_match: bool | None = None
+    selfie_uploaded: bool = False
 
     model_config = {"from_attributes": True}
 
