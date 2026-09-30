@@ -177,12 +177,25 @@ def compare_faces(
 
         model_name = model_name or settings.face_model
 
+        # Use the same detector as upload validation instead of a second OpenCV
+        # detector that can reject a face already accepted by MediaPipe.
+        crops = []
+        for label, path in (("Selfie", image1_path), ("Document", image2_path)):
+            faces = detect_faces(path)
+            if len(faces) != 1:
+                raise FaceServiceError(f"{label} must contain exactly one detected face; found {len(faces)}")
+            crop = extract_face(path)
+            if crop is None:
+                raise FaceServiceError(f"{label} face crop is empty")
+            crops.append(crop)
+
         result = DeepFace.verify(
-            img1_path=image1_path,
-            img2_path=image2_path,
+            img1_path=crops[0],
+            img2_path=crops[1],
             model_name=model_name,
             enforce_detection=True,
-            detector_backend="opencv",
+            detector_backend="skip",
+            align=False,
         )
 
         distance = float(result["distance"])
@@ -203,10 +216,16 @@ def compare_faces(
             "is_match": is_match,
         }
 
+    except FaceServiceError:
+        raise
     except ValueError as e:
-        raise FaceServiceError(f"Face comparison failed: {e}") from e
+        cause = e
+        while cause.__cause__ is not None:
+            cause = cause.__cause__
+        logger.exception("Face comparison failed", error=str(e), cause=str(cause))
+        raise FaceServiceError(f"Face comparison failed: {e}; cause: {cause}") from e
     except Exception as e:
-        logger.error("Face comparison error", error=str(e))
+        logger.exception("Face comparison error", error=str(e))
         raise FaceServiceError("Face comparison failed due to an internal error") from e
 
 

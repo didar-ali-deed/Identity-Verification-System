@@ -116,17 +116,27 @@ See [development setup and operations](docs/development.md) for local Python com
 React 19, TypeScript, Vite, Tailwind CSS, TanStack Query and Zustand; FastAPI, SQLAlchemy, Alembic, PostgreSQL, Redis and Celery; EasyOCR, MediaPipe and DeepFace by default; optional InsightFace and MiniFASNet.
 
 ```mermaid
-flowchart LR
-    Browser[React and phone camera] --> API[FastAPI]
-    API --> DB[(PostgreSQL and task outbox)]
-    API --> Files[Private upload volume]
-    DB --> Dispatcher[Celery Beat and dispatcher]
-    Dispatcher --> Redis[(Redis)]
-    Redis --> Worker[Verification worker]
-    Files --> Worker
-    Worker --> Evidence[Stages, decisions and audit]
-    Evidence --> DB
-    DB --> Review[User status and admin review]
+flowchart TB
+    Desktop[Desktop browser] --> Proxy[Nginx gateway :8080]
+    Phone[Phone browser and camera] --> Tunnel[Optional HTTPS tunnel]
+    Tunnel --> Proxy
+    Proxy --> UI[React frontend]
+    Proxy --> API[FastAPI: authentication and verification]
+    API --> DB[(PostgreSQL: accounts, applications, outbox and evidence)]
+    API --> Uploads[Private document and selfie volume]
+    API --> Redis[(Redis: task broker and expiring phone tokens)]
+    Beat[Celery Beat] --> Dispatch[Outbox dispatcher]
+    DB --> Dispatch
+    Dispatch --> Redis
+    Redis --> Worker[Celery verification worker]
+    Uploads --> Worker
+    Worker --> Pipeline[Ten-stage verification pipeline]
+    Pipeline --> OCR[EasyOCR and shared field parser]
+    Pipeline --> Face[MediaPipe and DeepFace / optional InsightFace]
+    Pipeline --> PAD[Heuristic / optional MiniFASNet liveness]
+    Pipeline --> DB
+    UI --> Review[Authenticated admin review]
+    Review --> API
 ```
 
 [Detailed architecture and limitations](docs/architecture.md) · [API examples](docs/api-examples.http) · [Model configuration and licenses](docs/models.md)
@@ -173,3 +183,109 @@ Application source is [MIT](LICENSE). Model weights have separate terms; Insight
 Document authenticity checks remain heuristic. Server-verified active challenges, automatic retention, object-storage deployment and webhooks are future work. See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 Run and check: [run guide](docs/run-guide.md). Next work: [improvement plan](docs/improvement-plan.md).
+
+## End-to-end verification workflow
+
+1. **Create an account.** Register a profile and sign in. Authentication identifies the owner of each application; administrators use a separate role.
+2. **Create a verification draft.** Upload a passport and national ID. Files are stored privately, and OCR jobs are requested through the transactional outbox.
+3. **Review extracted information.** Compare the profile name, document names, DOB and gender. Missing OCR is shown separately from a mismatch. Passport nationality and CNIC country of stay describe different facts and are not treated as conflicting citizenship evidence. Each document's expiry is checked independently.
+4. **Replace unreadable captures.** Before processing, upload a clearer document if needed. Replacement clears superseded evidence so an earlier OCR job cannot overwrite the replacement.
+5. **Capture a selfie.** Use the desktop webcam or an expiring phone link. The phone flow captures three frames and sends them to the same application.
+6. **Wait for processing.** The worker runs the pipeline and stores its complete result. The status screen displays channel scores, stage evidence, flags and reason codes.
+7. **Inspect the decision.** Expand stages rather than interpreting the total score alone. A successful stage execution does not mean every check inside that stage passed.
+8. **Review or retry.** Authorized reviewers handle review-ready applications. The explicit reset action removes the current verification and its files while retaining the account. Completed pipeline results are otherwise reused on duplicate task delivery.
+
+## Understanding results
+
+| Signal | Meaning | What to inspect |
+|---|---|---|
+| Name / DOB / identity number match | Extracted values agree after normalization | Stages 2, 3 and 5; agreement alone does not authenticate a document |
+| Father name unavailable | Cross-document comparison lacks a value and receives zero credit | Both extracted fields; missing evidence is distinct from a measured mismatch |
+| Biometric comparison error | Face comparison could not produce usable evidence | Stage 5 comparison errors and worker traceback |
+| Biometric non-match | The model produced evidence that did not satisfy verification | Document-specific distance and verification results |
+| Liveness human review required | Heuristic checks did not provide learned PAD verification | Stage 1 and selected liveness backend |
+| MRZ missing or invalid | The machine-readable zone was not read or failed check-digit validation | Stage 2; visible fields can still be extracted successfully |
+| Expiry valid | That document's extracted expiry has not passed | Stage 3; two documents may have different expiry dates |
+| Fraud percentage | A heuristic screening score | Individual checks; it is not a calibrated probability of fraud |
+
+Biometric matching requires successful comparisons against **every submitted identity document**. The default DeepFace adapter validates face crops with MediaPipe before producing embeddings; images with no detected face or multiple detected faces are refused. Provider exceptions retain their underlying cause in worker logs. This path has regression coverage, but the latest changes still need a fresh end-to-end Docker verification on real captures.
+
+Mandatory gates take precedence over the weighted total. A high document-text score cannot compensate for failed biometric evidence. Heuristic liveness cannot grant automatic approval. Configuring a learned provider also requires licensed assets, evaluation and appropriate thresholds; installation alone does not establish accuracy.
+
+## Mobile verification, step by step
+
+Start the full application first. With `cloudflared` installed, open a second PowerShell window at the repository root:
+
+```powershell
+.\scripts\start-phone.ps1
+```
+
+Keep that terminal open. Open the printed **HTTPS URL on the desktop**, sign in, and select **Take a Selfie → Use phone**. Scan the newly generated QR code on the phone, allow camera access and follow the capture instructions. The QR address follows the desktop page's origin: generating it from `http://localhost:8080` produces a localhost link that cannot reach your PC from the phone.
+
+With the public HTTPS tunnel, the devices can use different networks. A direct LAN connection requires the phone to reach the PC on the local network, and phone camera access needs a secure browser context. The helper currently targets port **8080**; if you change `HTTP_PORT`, adjust the tunnel target accordingly. Restarting the helper produces a new URL. Existing QR links expire after ten minutes and are single-use.
+
+## Daily Docker operations
+
+Run these from the repository root:
+
+```powershell
+# Build changes and start the application.
+.\scripts\start.ps1
+
+# Start existing images again without rebuilding.
+docker compose up -d --wait --wait-timeout 180
+
+# Check services and inspect processing logs.
+docker compose ps
+docker compose logs --tail=100 backend celery-worker
+
+# Stop services while keeping named volumes.
+docker compose down
+```
+
+The full stack has **seven services**: gateway, frontend, backend, worker, scheduler, database and broker. Multiple containers are expected because these services have different responsibilities. The backend, worker and scheduler share the same application build context and Docker layers.
+
+Named volumes retain PostgreSQL records, Redis state, uploads and mounted model caches. `docker compose down -v` deletes the project's named volumes; use it only for an intentional destructive reset. Resetting one verification through the UI is more limited than deleting the database.
+
+First builds download large AI dependencies, including TensorFlow. First inference may download additional model weights. The ML installation uses BuildKit's pip download cache and resume retries while keeping package hash verification enabled. Model assets stored outside mounted cache directories may download again when containers are recreated.
+
+## Configuration reference
+
+Copy `.env.example` for the complete set of local settings. The startup script creates a private root `.env` when absent; never commit it.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `JWT_SECRET_KEY` | Generated by the Windows startup script | Signs authentication tokens; required by Compose |
+| `HTTP_PORT` | `8080` | Browser gateway |
+| `API_PORT` | `18000` | Direct local API and documentation |
+| `POSTGRES_PORT` / `REDIS_PORT` | `55432` / `56379` | Local database and broker access |
+| `FACE_BACKEND` | `deepface` | Face comparison provider; optional `insightface` |
+| `FACE_MODEL` | `Facenet` | DeepFace recognition model |
+| `LIVENESS_BACKEND` | `heuristic` | Default review-only liveness or optional learned provider |
+| `LIVENESS_THRESHOLD` | `0.75` | Liveness acceptance threshold |
+| `PIPELINE_PASS_THRESHOLD` | `0.90` | Score threshold after mandatory evidence gates |
+| `PIPELINE_REVIEW_THRESHOLD` | `0.75` | Review score threshold when no override applies |
+| `INSTALL_ENHANCED` | `false` | Include optional enhanced inference dependencies during image build |
+| `INFERENCE_USE_GPU` | `false` | Inference GPU preference; see the GPU configuration |
+
+Compose supplies container database URLs, upload paths and runtime settings. Local Python development uses the localhost addresses from `.env.example`. Changing an image build argument requires rebuilding; changing service environment requires recreating the affected containers. See [model setup](docs/models.md) for supported providers, assets and licenses.
+
+## Troubleshooting
+
+| Problem | Next step |
+|---|---|
+| Build is still downloading packages | Leave the terminal running; the first inference image is large |
+| Package hash mismatch | Retry the build; preserve hash verification and share the failing download line if it recurs |
+| Phone QR contains HTTP or localhost | Open the tunnel's HTTPS URL on the desktop, then generate a new QR |
+| Tunnel URL stopped working | Check the tunnel terminal; restart the helper and use its new URL |
+| Camera permission denied | Allow camera access for that HTTPS origin in the phone browser |
+| Text matches but application is rejected | Inspect biometric evidence, liveness and hard-rule overrides |
+| Face error hides the underlying cause | Rebuild to include the latest adapter and inspect worker logs |
+| An old result still appears after a rebuild | Completed results are saved snapshots; use a new verification attempt to test changed code |
+| Services stopped after `docker compose down` | Start existing images with `docker compose up -d --wait --wait-timeout 180` |
+
+## Engineering status and next steps
+
+Completed work includes a shared EasyOCR parser for document review and pipeline extraction, shared date normalization, removal of unused services and redundant configuration, Docker download retries, phone capture, transactional dispatch, evidence persistence and fail-closed biometric gates. Recent targeted validation passed **45 tests** covering face-comparison behavior, spatial OCR, pipeline fields and evidence rules, alongside Ruff lint and formatting checks. These tests simulate providers; they do not measure real recognition performance.
+
+Remaining priorities are real-capture biometric validation, passport MRZ and father-name extraction evaluation across layouts, learned liveness evaluation, model/version pinning, consented benchmark data, retention jobs and production storage. The latest face/parser changes have **not yet been verified through a fresh full Docker workflow**. Follow the [improvement plan](docs/improvement-plan.md) rather than weakening verification gates to obtain an approval.

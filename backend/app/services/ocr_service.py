@@ -73,7 +73,9 @@ def get_raw_text(ocr_results: list[dict]) -> str:
 def _canonical_label(text: str) -> str:
     # Normalize common label glyph errors without changing any identity value.
     text = re.sub(r"\bdate\s+o[flt1]\s+", "Date of ", text, flags=re.IGNORECASE)
-    return re.sub(r"\bexpury\b", "Expiry", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bexpury\b", "Expiry", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bfather(?:['’]s)?\b", "Father", text, flags=re.IGNORECASE)
+    return re.sub(r"\bfather\s*/\s*husband\s*name\b", "Father Name", text, flags=re.IGNORECASE)
 
 
 def _label_value(rows: list[dict], label_re: str) -> str | None:
@@ -169,7 +171,7 @@ def parse_passport(raw_text: str, ocr_results: list[dict], image_path: str = "",
             return spatial
         for i, line in enumerate(lines):
             parts = re.split(r"[:\|]", line, maxsplit=1)
-            if re.search(label_re, parts[0].strip(), re.IGNORECASE):
+            if re.search(label_re, _canonical_label(parts[0].strip()), re.IGNORECASE):
                 # Check same line after colon, or next non-empty line
                 after_colon = re.split(r"[:\|]", line, maxsplit=1)
                 if len(after_colon) > 1 and after_colon[1].strip():
@@ -222,7 +224,7 @@ def parse_passport(raw_text: str, ocr_results: list[dict], image_path: str = "",
             pn = m.group(1) if m else None
         data["document_number"] = pn
 
-    father_val = _next_val(r"father|husband\s*name")
+    father_val = _next_val(r"^father(?:\s*name)?$|^husband\s*name$")
     if father_val:
         data["father_name"] = father_val
 
