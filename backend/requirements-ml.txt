@@ -1,12 +1,9 @@
 # Heavy ML packages — slow Docker layer, cached between rebuilds.
 
-# OCR — TrOCR (Microsoft) via HuggingFace.
+# Shared inference runtime. EasyOCR is pinned in requirements-ocr.txt.
 # Install torch separately for your platform; Docker defaults to the CPU wheel.
 torch>=2.2.0
 torchvision>=0.17.0
-transformers>=4.40.0,<5
-timm>=0.9.0
-sentencepiece>=0.1.99
 
 # Face Detection & Recognition
 mediapipe>=0.10.14

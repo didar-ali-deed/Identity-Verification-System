@@ -12,7 +12,7 @@ class DocumentUploadResponse(BaseModel):
     file_size: int
     mime_type: str
     uploaded_at: datetime
-    extracted_fields: dict | None = None  # Synchronous OCR result
+    extracted_fields: dict | None = None  # Populated by the background OCR task
 
     model_config = {"from_attributes": True}
 

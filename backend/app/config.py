@@ -39,14 +39,12 @@ class Settings(BaseSettings):
     face_similarity_threshold: float = 0.6
     fraud_score_threshold: float = 0.7
 
-    # God-Level Pipeline
-    pipeline_mode: Literal["god"] = "god"
+    # verification Pipeline
     pipeline_pass_threshold: float = 0.90
     pipeline_review_threshold: float = 0.75
     velocity_window_hours: int = 2160  # 90 days
     velocity_max_submissions: int = 2
     ocr_confidence_threshold: float = 0.85
-    ocr_backend: Literal["easyocr"] = "easyocr"
     inference_use_gpu: bool = False
     face_backend: Literal["deepface", "insightface"] = "deepface"
     face_model: str = "Facenet"

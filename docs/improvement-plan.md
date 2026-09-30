@@ -4,7 +4,7 @@ The immediate problem was inconsistent extraction: document review used the spat
 
 ## Completed cleanup
 
-- One OCR provider: EasyOCR. Removed TrOCR inference and fallback configuration; Docker prunes its obsolete packages from the final runtime. The historical heavy build manifest remains for compatibility with the tested dependency cache.
+- One OCR provider: EasyOCR. Removed TrOCR inference, fallback configuration and obsolete packages from the dependency manifests.
 - One visual field parser for review and pipeline; supports spatial labels and month-name dates.
 - Removed the unused legacy scoring/face task path and its scoring service.
 - Removed superseded TrOCR reports. Synthetic specimen images, meaningful tests, migrations, model adapters and security documentation remain.

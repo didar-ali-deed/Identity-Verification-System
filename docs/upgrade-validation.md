@@ -2,7 +2,7 @@
 
 Validated locally on 30 September 2026 using synthetic data.
 
-- 99 backend tests passed, including PostgreSQL integration tests for ownership, uploads, replacement, reset/file cleanup, outbox delivery, review restrictions and retry preservation, plus OCR orientation, label geometry, reading-order and MRZ regressions.
+- 111 backend tests passed, including PostgreSQL integration tests for ownership, uploads, replacement, reset/file cleanup, outbox delivery, review restrictions and retry preservation, plus OCR orientation, label geometry, reading-order, MRZ and shared date-format regressions.
 - Ten Playwright browser tests passed across desktop and mobile viewports, including demo outcomes, camera submission, replacement, reset and ambiguous OCR name/date comparison.
 - Backend Ruff lint/format, frontend ESLint, TypeScript/Vite production build and Git whitespace checks passed.
 - Fresh PostgreSQL database migrated through `e62f9140b3a1`.

@@ -52,7 +52,7 @@ class IDVApplication(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    # God-level pipeline fields
+    # verification pipeline fields
     pipeline_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     pipeline_decision: Mapped[str | None] = mapped_column(String(20), nullable=True)
 

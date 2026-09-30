@@ -12,7 +12,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 
-// Fix: add polling so status auto-updates while pipeline is running
+// Poll until processing finishes.
 const REFETCH_MS = 5000;
 
 export default function IDVStatus() {
@@ -43,26 +43,6 @@ export default function IDVStatus() {
   }
 
   if (error) {
-    const is404 = (error as { response?: { status?: number } }).response?.status === 404;
-    if (is404) {
-      return (
-        <div className="max-w-lg mx-auto text-center py-20">
-          <div className="w-16 h-16 rounded-2xl bg-muted border border-border flex items-center justify-center mx-auto mb-5">
-            <FileCheck className="h-8 w-8 text-muted-foreground" />
-          </div>
-          <h1 className="text-2xl font-bold text-foreground">No Application Found</h1>
-          <p className="text-muted-foreground mt-2 text-sm">
-            You haven&apos;t submitted an IDV application yet.
-          </p>
-          <Link
-            to="/idv"
-            className="inline-block mt-6 px-6 py-2.5 bg-primary text-white rounded-xl text-sm font-semibold hover:bg-primary/90 no-underline btn-glow transition-all"
-          >
-            Start Verification
-          </Link>
-        </div>
-      );
-    }
     return (
       <div className="text-center py-24">
         <AlertTriangle className="h-12 w-12 text-destructive mx-auto mb-4" />
@@ -92,7 +72,7 @@ export default function IDVStatus() {
     );
   }
 
-  const hasFaceMatch = application.selfie_uploaded;
+  const hasSelfie = application.selfie_uploaded;
 
   return (
     <div className="max-w-2xl mx-auto space-y-5">
@@ -162,8 +142,8 @@ export default function IDVStatus() {
           />
           <ProgressItem
             icon={Camera} title="Selfie Capture"
-            done={hasFaceMatch}
-            detail={hasFaceMatch ? "Selfie captured" : "Awaiting selfie"}
+            done={hasSelfie}
+            detail={hasSelfie ? "Selfie captured" : "Awaiting selfie"}
           />
           <ProgressItem
             icon={Brain} title="AI Processing"

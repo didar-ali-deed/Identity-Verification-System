@@ -55,7 +55,7 @@ export function useIDVStatus(
   });
 }
 
-// Upload document — returns extracted fields from synchronous OCR
+// Upload a document; useDocumentOCR polls for background extraction.
 export function useUploadDocument() {
   const queryClient = useQueryClient();
 

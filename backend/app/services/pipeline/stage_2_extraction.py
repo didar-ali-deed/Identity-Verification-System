@@ -25,6 +25,7 @@ from app.services.ocr_service import (
     validate_icao_check_digit,
 )
 from app.services.pipeline.types import ExtractedFields, PipelineContext, StageResult
+from app.utils.dates import normalize_document_date as _mrz_date_to_canonical
 
 settings = get_settings()
 logger = structlog.get_logger()
@@ -312,22 +313,6 @@ async def run_stage_2(ctx: PipelineContext) -> StageResult:
 
 
 # --- Helpers ---
-
-
-def _mrz_date_to_canonical(mrz_date: str) -> str | None:
-    """Convert MRZ date (YYMMDD) to YYYYMMDD canonical format."""
-    if len(mrz_date) != 6 or not mrz_date.isdigit():
-        return None
-    yy = int(mrz_date[:2])
-    mm = mrz_date[2:4]
-    dd = mrz_date[4:6]
-
-    # Century resolution: per ICAO rule
-    import datetime
-
-    current_yy = datetime.date.today().year % 100
-    year = 1900 + yy if yy > current_yy + 10 else 2000 + yy
-    return f"{year}{mm}{dd}"
 
 
 def _ocr_correct_mrz(data: str) -> str:

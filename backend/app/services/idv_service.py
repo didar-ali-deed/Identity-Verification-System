@@ -66,19 +66,6 @@ async def get_user_application(db: AsyncSession, user_id: uuid.UUID) -> IDVAppli
     return result.scalar_one_or_none()
 
 
-async def get_application_by_id(db: AsyncSession, application_id: uuid.UUID) -> IDVApplication | None:
-    result = await db.execute(
-        select(IDVApplication)
-        .where(IDVApplication.id == application_id)
-        .options(
-            selectinload(IDVApplication.documents),
-            selectinload(IDVApplication.face_verifications),
-            selectinload(IDVApplication.user),
-        )
-    )
-    return result.scalar_one_or_none()
-
-
 def _validate(content: bytes) -> str:
     try:
         mime, _, _ = validate_uploaded_image(content)

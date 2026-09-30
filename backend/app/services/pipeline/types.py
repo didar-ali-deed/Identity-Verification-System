@@ -1,4 +1,4 @@
-"""Core data structures for the God-Level pipeline."""
+"""Core data structures for the verification pipeline."""
 
 from __future__ import annotations
 

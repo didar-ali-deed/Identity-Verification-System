@@ -1,6 +1,5 @@
 import re
 import threading
-from datetime import UTC, datetime
 from pathlib import Path
 
 import cv2
@@ -8,6 +7,7 @@ import numpy as np
 import structlog
 
 from app.config import get_settings
+from app.utils.dates import normalize_document_date
 
 logger = structlog.get_logger()
 
@@ -445,27 +445,6 @@ def parse_document(raw_text: str, ocr_results: list[dict], doc_type: str, image_
     raise OCRServiceError(f"Unsupported document type: {doc_type}")
 
 
-def validate_expiry(parsed_data: dict) -> dict:
-    """Check if the document is expired. Returns validation result."""
-    expiry_str = parsed_data.get("expiry_date")
-    if not expiry_str:
-        return {"is_expired": None, "message": "Expiry date not detected"}
-
-    try:
-        expiry = _parse_date_string(expiry_str)
-        if not expiry:
-            return {"is_expired": None, "message": "Could not parse expiry date"}
-
-        is_expired = expiry.replace(tzinfo=UTC) < datetime.now(UTC)
-        return {
-            "is_expired": is_expired,
-            "expiry_date": expiry.strftime("%Y-%m-%d"),
-            "message": "Document has expired" if is_expired else "Document is valid",
-        }
-    except Exception:
-        return {"is_expired": None, "message": "Expiry date validation failed"}
-
-
 # --- Private helpers ---
 
 
@@ -544,33 +523,15 @@ def _parse_mrz(mrz_lines: list[str]) -> dict:
         # Line 2: DOC_NUMBER(9) + CHECK(1) + NATIONALITY(3) + DOB(6) + CHECK(1) + GENDER(1) + EXPIRY(6) + CHECK(1)
         data["document_number"] = line2[0:9].replace("<", "")
         dob_raw = line2[13:19]
-        data["date_of_birth"] = _mrz_date_to_string(dob_raw)
+        data["date_of_birth"] = normalize_document_date(dob_raw)
         data["gender"] = {"M": "Male", "F": "Female"}.get(line2[20], "Unknown")
         exp_raw = line2[21:27]
-        data["expiry_date"] = _mrz_date_to_string(exp_raw)
+        data["expiry_date"] = normalize_document_date(exp_raw)
 
     except (IndexError, ValueError):
         pass
 
     return data
-
-
-def _mrz_date_to_string(mrz_date: str) -> str | None:
-    """Convert MRZ date (YYMMDD) to canonical YYYYMMDD format.
-
-    Uses ICAO century rule: if YY > current_year+10 → 1900s, else 2000s.
-    Output is YYYYMMDD (no dashes) — consistent with stage_2_extraction.
-    """
-    if len(mrz_date) != 6 or not mrz_date.isdigit():
-        return None
-    import datetime as _dt
-
-    yy = int(mrz_date[:2])
-    mm = mrz_date[2:4]
-    dd = mrz_date[4:6]
-    current_yy = _dt.date.today().year % 100
-    year = 1900 + yy if yy > current_yy + 10 else 2000 + yy
-    return f"{year}{mm}{dd}"
 
 
 def _extract_from_viz(text: str) -> dict:
@@ -639,26 +600,6 @@ def _extract_dates_from_text(text: str, data: dict) -> None:
         data["expiry_date"] = unassigned[1]
 
 
-def _parse_date_string(date_str: str) -> datetime | None:
-    """Attempt to parse a date string in various formats."""
-    formats = [
-        "%d/%m/%Y",
-        "%d-%m-%Y",
-        "%d.%m.%Y",
-        "%Y/%m/%d",
-        "%Y-%m-%d",
-        "%Y.%m.%d",
-        "%d %b %Y",
-        "%d %B %Y",
-    ]
-    for fmt in formats:
-        try:
-            return datetime.strptime(date_str.strip(), fmt)
-        except ValueError:
-            continue
-    return None
-
-
 # --- ICAO 9303 MRZ check digit validation ---
 
 _ICAO_WEIGHTS = [7, 3, 1]
@@ -704,16 +645,6 @@ def validate_icao_check_digit(data: str, check_char: str) -> bool:
         total += val * weight
 
     return (total % 10) == expected
-
-
-def compute_icao_check_digit(data: str) -> int:
-    """Compute the ICAO 9303 check digit for a field."""
-    total = 0
-    for i, char in enumerate(data.upper()):
-        val = _ICAO_CHAR_VALUES.get(char, 0)
-        weight = _ICAO_WEIGHTS[i % 3]
-        total += val * weight
-    return total % 10
 
 
 # --- TD1 MRZ parsing (National ID cards: 3 lines x 30 chars) ---
@@ -765,12 +696,12 @@ def parse_td1_mrz(mrz_lines: list[str]) -> dict:
         # Line 2
         dob_raw = line2[0:6]
         dob_check = line2[6]
-        data["date_of_birth"] = _mrz_date_to_string(dob_raw)
+        data["date_of_birth"] = normalize_document_date(dob_raw)
         data["dob_valid"] = validate_icao_check_digit(dob_raw, dob_check)
         data["gender"] = {"M": "Male", "F": "Female"}.get(line2[7], "Unknown")
         exp_raw = line2[8:14]
         exp_check = line2[14]
-        data["expiry_date"] = _mrz_date_to_string(exp_raw)
+        data["expiry_date"] = normalize_document_date(exp_raw)
         data["expiry_valid"] = validate_icao_check_digit(exp_raw, exp_check)
         data["nationality"] = line2[15:18].replace("<", "")
         data["optional_2"] = line2[18:29].replace("<", "").strip() or None
@@ -794,13 +725,6 @@ def parse_td1_mrz(mrz_lines: list[str]) -> dict:
 
 
 # --- OCR with confidence per-field ---
-
-
-def extract_text_with_bboxes(image_path: str) -> tuple[list[dict], str]:
-    """Extract text with full bbox + confidence info. Returns (results, raw_text)."""
-    results = extract_text(image_path)
-    raw_text = get_raw_text(results)
-    return results, raw_text
 
 
 def compute_field_confidence(

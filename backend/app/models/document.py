@@ -39,7 +39,7 @@ class Document(Base):
     fraud_details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     face_image_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    # God-level pipeline fields
+    # verification pipeline fields
     document_class: Mapped[str | None] = mapped_column(String(10), nullable=True)
     issuing_country: Mapped[str | None] = mapped_column(String(3), nullable=True)
     ocr_confidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

@@ -64,7 +64,6 @@ function compareValues(
   b: string | null,
   exact = false
 ): "match" | "mismatch" | "partial" | "missing" {
-  if (!a && !b) return "missing";
   if (!a || !b) return "missing";
   const na = exact ? canonicalDate(a) : normalize(a);
   const nb = exact ? canonicalDate(b) : normalize(b);
@@ -75,41 +74,31 @@ function compareValues(
 }
 
 const STATUS_CONFIG = {
-  valid: { icon: CheckCircle2, color: "text-emerald-400", bg: "", border: "", label: "Valid" },
-  expired: { icon: XCircle, color: "text-red-400", bg: "", border: "", label: "Expired" },
+  valid: { icon: CheckCircle2, color: "text-emerald-400", label: "Valid" },
+  expired: { icon: XCircle, color: "text-red-400", label: "Expired" },
   available: {
     icon: CheckCircle2,
     color: "text-muted-foreground",
-    bg: "bg-muted/30",
-    border: "border-border",
     label: "Read",
   },
   match: {
     icon: CheckCircle2,
     color: "text-emerald-400",
-    bg: "bg-emerald-500/8",
-    border: "border-emerald-500/20",
     label: "Match",
   },
   partial: {
     icon: AlertCircle,
     color: "text-amber-400",
-    bg: "bg-amber-500/8",
-    border: "border-amber-500/20",
     label: "Check OCR",
   },
   mismatch: {
     icon: XCircle,
     color: "text-red-400",
-    bg: "bg-red-500/8",
-    border: "border-red-500/20",
     label: "Mismatch",
   },
   missing: {
     icon: AlertCircle,
     color: "text-muted-foreground",
-    bg: "bg-muted/30",
-    border: "border-border",
     label: "Missing",
   },
 };

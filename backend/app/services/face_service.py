@@ -272,20 +272,6 @@ def validate_selfie(image_path: str) -> dict:
     return checks
 
 
-def validate_document_face(image_path: str) -> dict:
-    """Validate that a document image contains a detectable face."""
-    faces = detect_faces(image_path)
-
-    return {
-        "has_face": len(faces) > 0,
-        "face_count": len(faces),
-        "confidence": faces[0]["confidence"] if faces else 0.0,
-        "message": (
-            "Face detected in document" if faces else "No face detected in document. Please upload a clearer image"
-        ),
-    }
-
-
 # --- Private helpers ---
 
 

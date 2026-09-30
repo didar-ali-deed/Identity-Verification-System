@@ -11,6 +11,8 @@ cd E:\idv\Identity-Verification-System
 
 The script initializes a private root `.env` if missing, builds containers and waits for health checks. Existing data is retained. First inference downloads model files.
 
+The first Docker build also downloads large inference dependencies. The ML install uses a persistent BuildKit pip cache and resumed-download retries. A hash mismatch means the download failed verification: retry the build rather than changing the expected hash or disabling verification. Successfully downloaded packages can be reused on retry.
+
 - App: http://localhost:8080
 - Synthetic demonstration: http://localhost:8080/demo
 - Backend docs: http://localhost:18000/api/docs

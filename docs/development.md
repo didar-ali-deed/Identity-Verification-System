@@ -8,7 +8,6 @@ From the repository root, using Python 3.12:
 py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 .venv\Scripts\python.exe -m pip install -r backend\requirements.txt -r backend\requirements-ml.txt -r backend\requirements-tensorflow.txt -r backend\requirements-ocr.txt
-.venv\Scripts\python.exe -m pip uninstall -y transformers timm sentencepiece
 Copy-Item .env.example backend\.env
 # Replace JWT_SECRET_KEY in backend/.env with a unique random signing key.
 docker compose up -d postgres redis

@@ -13,6 +13,7 @@ import time
 import structlog
 
 from app.services.pipeline.types import ExtractedFields, PipelineContext, StageResult
+from app.utils.dates import normalize_document_date as normalize_date
 
 logger = structlog.get_logger()
 
@@ -69,51 +70,6 @@ FATHER_PARTICLES = {
     "SON",
     "OF",
 }
-
-
-def normalize_date(raw_date: str | None) -> str | None:
-    """Convert various date formats to canonical YYYYMMDD.
-
-    Handles: YYMMDD (MRZ), DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY, YYYYMMDD.
-    Applies ICAO century rule: YY > current_year+10 → 1900s, else 2000s.
-    """
-    if not raw_date:
-        return None
-
-    if re.fullmatch(r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}", raw_date.strip()):
-        from app.services.ocr_service import _parse_date_string
-
-        parsed = _parse_date_string(raw_date)
-        return parsed.strftime("%Y%m%d") if parsed else None
-
-    raw = raw_date.strip().replace(" ", "")
-
-    # Already canonical YYYYMMDD
-    if re.match(r"^\d{8}$", raw):
-        return raw
-
-    # MRZ format: YYMMDD
-    if re.match(r"^\d{6}$", raw):
-        yy = int(raw[:2])
-        mm = raw[2:4]
-        dd = raw[4:6]
-        current_yy = datetime.date.today().year % 100
-        year = 1900 + yy if yy > current_yy + 10 else 2000 + yy
-        return f"{year}{mm}{dd}"
-
-    # DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
-    match = re.match(r"^(\d{2})[/\-.](\d{2})[/\-.](\d{4})$", raw)
-    if match:
-        dd, mm, yyyy = match.groups()
-        return f"{yyyy}{mm}{dd}"
-
-    # YYYY/MM/DD or YYYY-MM-DD
-    match = re.match(r"^(\d{4})[/\-.](\d{2})[/\-.](\d{2})$", raw)
-    if match:
-        yyyy, mm, dd = match.groups()
-        return f"{yyyy}{mm}{dd}"
-
-    return None
 
 
 def normalize_name(raw_name: str | None) -> str | None:

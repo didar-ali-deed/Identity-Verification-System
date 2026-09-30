@@ -27,7 +27,9 @@ RUN pip install --no-cache-dir \
 
 # ── Layer 1b: heavy ML packages (slow, cached) ──────────────────────────────
 COPY requirements-ml.txt .
-RUN pip install --no-cache-dir -r requirements-ml.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade "pip==26.2.1" && \
+    pip install --resume-retries 10 -r requirements-ml.txt
 
 # DeepFace requires legacy Keras when running with TensorFlow 2.16 or newer.
 COPY requirements-tensorflow.txt .
@@ -50,9 +52,6 @@ RUN pip install --no-cache-dir -r requirements-ocr.txt
 
 # MediaPipe's image runtime requires EGL even for CPU inference.
 RUN apt-get update && apt-get install -y --no-install-recommends libegl1 libgles2 && rm -rf /var/lib/apt/lists/*
-
-# Preserve the verified heavy build layer while pruning the retired OCR runtime.
-RUN pip uninstall -y transformers timm sentencepiece
 
 # EasyOCR downloads its models on first use into the mounted model cache.
 

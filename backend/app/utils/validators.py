@@ -64,29 +64,6 @@ def validate_image_integrity(file_content: bytes) -> None:
         raise ValidationError("Image file is corrupted or truncated") from e
 
 
-def strip_image_metadata(file_content: bytes, mime_type: str) -> bytes:
-    """Re-encode image to strip EXIF and other metadata."""
-    image = Image.open(io.BytesIO(file_content))
-    # Create new image without metadata
-    clean = Image.new(image.mode, image.size)
-    clean.putdata(list(image.getdata()))
-    buf = io.BytesIO()
-    fmt = "JPEG" if mime_type == "image/jpeg" else "PNG"
-    clean.save(buf, format=fmt, quality=95 if fmt == "JPEG" else None)
-    return buf.getvalue()
-
-
-def sanitize_text_input(text: str) -> str:
-    """Sanitize user text input to prevent XSS and injection."""
-    import html
-
-    text = text.strip()
-    text = html.escape(text)
-    # Remove null bytes
-    text = text.replace("\x00", "")
-    return text
-
-
 def validate_uploaded_image(file_content: bytes) -> tuple[str, int, int]:
     """Run all validations on an uploaded image.
 

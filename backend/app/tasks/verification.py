@@ -4,10 +4,8 @@ import uuid
 import structlog
 from celery.signals import worker_process_init
 
-from app.config import get_settings
 from app.tasks import celery_app
 
-settings = get_settings()
 logger = structlog.get_logger()
 
 
@@ -59,7 +57,7 @@ def process_document_ocr(self, document_id: str, image_path: str, doc_type: str)
         _run_async(_update_document_ocr(document_id, parsed_data, raw_text))
 
         logger.msg("OCR processing complete", document_id=document_id)
-        return {"document_id": document_id, "status": "completed", "parsed_data": parsed_data}
+        return {"document_id": document_id, "status": "completed"}
 
     except Exception as exc:
         logger.error("OCR processing failed", document_id=document_id, error=str(exc))
@@ -126,23 +124,23 @@ async def _update_document_fraud(document_id: str, score: float, details: dict):
             await session.commit()
 
 
-# --- God-Level Pipeline Task ---
+# --- verification Pipeline Task ---
 
 
 @celery_app.task(bind=True, max_retries=2, time_limit=300)
 def run_god_pipeline(self, application_id: str):
-    """Run the 10-stage God-Level verification pipeline."""
+    """Run verification; retain the registered task name for existing queued jobs."""
     try:
-        logger.info("God pipeline task starting", application_id=application_id)
+        logger.info("Verification task starting", application_id=application_id)
         result = _run_async(_execute_god_pipeline(application_id))
         logger.info(
-            "God pipeline task complete",
+            "Verification task complete",
             application_id=application_id,
             decision=result.get("decision"),
         )
         return result
     except Exception as exc:
-        logger.error("God pipeline task failed", application_id=application_id, error=str(exc))
+        logger.error("Verification task failed", application_id=application_id, error=str(exc))
         raise self.retry(exc=exc) from exc
 
 

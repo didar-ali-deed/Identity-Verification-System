@@ -1,4 +1,4 @@
-"""Pydantic schemas for the God-Level pipeline API endpoints."""
+"""Pydantic schemas for the verification pipeline API endpoints."""
 
 import uuid
 from datetime import datetime
